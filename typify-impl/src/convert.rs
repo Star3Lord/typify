@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use crate::merge::{merge_all, try_merge_with_subschemas};
 use crate::type_entry::{
-    EnumTagType, TypeEntry, TypeEntryDetails, TypeEntryEnum, TypeEntryNewtype, TypeEntryStruct,
-    Variant, VariantDetails,
+    EnumTagType, StructProperty, StructPropertyRename, StructPropertyState, TypeEntry,
+    TypeEntryDetails, TypeEntryEnum, TypeEntryNewtype, TypeEntryStruct, Variant, VariantDetails,
 };
 use crate::util::{all_mutually_exclusive, ref_key, ReorderedInstanceType, StringValidator};
 use log::{debug, info};
@@ -548,6 +548,25 @@ impl TypeSpace {
                 subschemas: subschemas @ Some(_),
                 ..
             } => {
+                // When the caller has opted into Compose semantics and we
+                // encounter the common Swagger-conversion pattern of an outer
+                // `type:object + properties:` schema with a sibling
+                // `allOf: [<$ref>, ...]`, try to render the result as
+                // `#[serde(flatten)]` fields + the outer schema's inline
+                // properties — instead of merging the base fields into the
+                // parent struct.
+                if matches!(self.settings.allof_strategy, crate::AllOfStrategy::Compose) {
+                    if let Some(composed) = self.try_compose_with_sibling_properties(
+                        type_name.clone(),
+                        original_schema,
+                        metadata,
+                        schema,
+                        subschemas.as_deref(),
+                    )? {
+                        return Ok(composed);
+                    }
+                }
+
                 let without_subschemas = SchemaObject {
                     subschemas: None,
                     metadata: None,
@@ -802,10 +821,16 @@ impl TypeSpace {
     ) -> Result<(TypeEntry, &'a Option<Box<Metadata>>)> {
         match format.as_ref().map(String::as_str) {
             Some("uuid") => {
-                self.uses_uuid = true;
+                let type_name = match &self.settings.uuid_type {
+                    Some(type_name) => type_name.clone(),
+                    None => {
+                        self.uses_uuid = true;
+                        "::uuid::Uuid".to_string()
+                    }
+                };
                 Ok((
                     TypeEntry::new_native(
-                        "::uuid::Uuid",
+                        type_name,
                         &[TypeSpaceImpl::Display, TypeSpaceImpl::FromStr],
                     ),
                     metadata,
@@ -813,20 +838,32 @@ impl TypeSpace {
             }
 
             Some("date") => {
-                self.uses_chrono = true;
+                let type_name = match &self.settings.date_type {
+                    Some(type_name) => type_name.clone(),
+                    None => {
+                        self.uses_chrono = true;
+                        "::chrono::naive::NaiveDate".to_string()
+                    }
+                };
                 Ok((
                     TypeEntry::new_native(
-                        "::chrono::naive::NaiveDate",
+                        type_name,
                         &[TypeSpaceImpl::Display, TypeSpaceImpl::FromStr],
                     ),
                     metadata,
                 ))
             }
             Some("date-time") => {
-                self.uses_chrono = true;
+                let type_name = match &self.settings.date_time_type {
+                    Some(type_name) => type_name.clone(),
+                    None => {
+                        self.uses_chrono = true;
+                        "::chrono::DateTime<::chrono::offset::Utc>".to_string()
+                    }
+                };
                 Ok((
                     TypeEntry::new_native(
-                        "::chrono::DateTime<::chrono::offset::Utc>",
+                        type_name,
                         &[TypeSpaceImpl::Display, TypeSpaceImpl::FromStr],
                     ),
                     metadata,
@@ -872,6 +909,14 @@ impl TypeSpace {
                         min_length: None,
                         pattern: None,
                     }) => Ok((TypeEntryDetails::String.into(), metadata)),
+
+                    Some(_) if self.settings.unconstrained_string => {
+                        // The caller opted out of per-field newtype emission
+                        // for constrained strings, so we drop the constraints
+                        // entirely and emit a plain `String`. Validation is
+                        // expected to happen elsewhere.
+                        Ok((TypeEntryDetails::String.into(), metadata))
+                    }
 
                     Some(validation) => {
                         if let Some(pattern) = &validation.pattern {
@@ -1098,8 +1143,10 @@ impl TypeSpace {
                         }
                     }
 
-                    // Use NonZero types for minimum 1
-                    if min == Some(1.) {
+                    // Use NonZero types for minimum 1 unless the caller has
+                    // opted out, in which case we drop the constraint and
+                    // emit the plain integer type.
+                    if min == Some(1.) && !self.settings.unconstrained_int {
                         return Ok((TypeEntry::new_integer(nz_ty), metadata));
                     } else {
                         return Ok((TypeEntry::new_integer(ty), metadata));
@@ -1132,6 +1179,10 @@ impl TypeSpace {
             .ok_or(Error::InvalidValue)?;
         }
 
+        // Honor the `unconstrained_int` knob: if the caller has opted out of
+        // NonZero* emission, we prefer the plain type even when min == 1.
+        let unconstrained = self.settings.unconstrained_int;
+
         // See if the value bounds fit within a known type.
         let maybe_type = match (min, max) {
             (None, Some(max)) => formats.iter().rev().find_map(|(_, ty, _nz_ty, _, imax)| {
@@ -1142,9 +1193,9 @@ impl TypeSpace {
                 }
             }),
             (Some(min), None) => formats.iter().rev().find_map(|(_, ty, nz_ty, imin, _)| {
-                if min == 1. {
+                if min == 1. && !unconstrained {
                     Some(nz_ty.to_string())
-                } else if (imin - min).abs() <= f64::EPSILON {
+                } else if (imin - min).abs() <= f64::EPSILON || (min == 1. && unconstrained) {
                     Some(ty.to_string())
                 } else {
                     None
@@ -1152,10 +1203,11 @@ impl TypeSpace {
             }),
             (Some(min), Some(max)) => {
                 formats.iter().rev().find_map(|(_, ty, nz_ty, imin, imax)| {
-                    if min == 1. {
+                    if min == 1. && !unconstrained {
                         Some(nz_ty.to_string())
-                    } else if (imax - max).abs() <= f64::EPSILON
-                        && (imin - min).abs() <= f64::EPSILON
+                    } else if (min == 1. && unconstrained)
+                        || ((imax - max).abs() <= f64::EPSILON
+                            && (imin - min).abs() <= f64::EPSILON)
                     {
                         Some(ty.to_string())
                     } else {
@@ -1367,6 +1419,227 @@ impl TypeSpace {
         ))
     }
 
+    /// Try to render an `allOf` composition as a struct that uses
+    /// `#[serde(flatten)]` to embed each `$ref` subschema's named type rather
+    /// than copying the base type's fields into the derived struct.
+    ///
+    /// Returns `Ok(None)` if the shape doesn't permit clean composition (e.g.
+    /// any subschema is neither a `$ref` nor an inline object, there are no
+    /// `$ref` subschemas at all so composition adds no value, or a property
+    /// name on an inline subschema would collide with a flattened base
+    /// field). In that case the caller falls back to the merge path.
+    ///
+    /// Even when this succeeds, callers should be aware of two interactions
+    /// that change wire behavior:
+    /// 1. `#[serde(flatten)]` is incompatible with
+    ///    `#[serde(deny_unknown_fields)]`; we therefore drop the latter.
+    /// 2. `#[serde_with::skip_serializing_none]` does not recurse into a
+    ///    flattened sub-struct, so any base type containing `Option<_>`
+    ///    fields should also carry that attribute if the consumer wants
+    ///    consistent "omit on None" behavior across base + derived.
+    fn convert_all_of_compose<'a>(
+        &mut self,
+        type_name: Name,
+        original_schema: &'a Schema,
+        metadata: &'a Option<Box<Metadata>>,
+        subschemas: &[Schema],
+    ) -> Result<Option<(TypeEntry, &'a Option<Box<Metadata>>)>> {
+        use crate::util::{sanitize, Case};
+        use crate::RefKey;
+
+        // Partition subschemas; bail to the merge path if anything is
+        // unsupported by the compose strategy.
+        let mut ref_subschemas: Vec<(String, Schema)> = Vec::new();
+        let mut inline_subschemas: Vec<Schema> = Vec::new();
+        for sub in subschemas {
+            let Schema::Object(obj) = sub else {
+                return Ok(None);
+            };
+            if let Some(ref_str) = obj.reference.as_deref() {
+                // External refs aren't supported elsewhere in typify either.
+                if !ref_str.starts_with('#') {
+                    return Ok(None);
+                }
+                let RefKey::Def(name) = ref_key(ref_str) else {
+                    return Ok(None);
+                };
+                ref_subschemas.push((name, sub.clone()));
+            } else if Self::is_inline_object(obj) {
+                inline_subschemas.push(sub.clone());
+            } else {
+                // Bool schemas, scalar constraints, nested all/any/one-of —
+                // none of these compose cleanly with `#[serde(flatten)]`.
+                return Ok(None);
+            }
+        }
+
+        // If there are no $ref bases, composition reduces to "just emit the
+        // inline subschemas merged together" which is exactly what the merge
+        // path already does. Return None to use that path instead.
+        if ref_subschemas.is_empty() {
+            return Ok(None);
+        }
+
+        // Build the property list.
+        let mut properties: Vec<StructProperty> = Vec::new();
+        let mut used_names: BTreeSet<String> = BTreeSet::new();
+
+        // 1. Each $ref subschema becomes a
+        //    `#[serde(flatten)] pub <snake>: <RefType>` field.
+        for (base_name, sub) in &ref_subschemas {
+            let (type_id, _) = self.id_for_schema(Name::Required(base_name.clone()), sub)?;
+            let field_name = sanitize(base_name, Case::Snake);
+            if !used_names.insert(field_name.clone()) {
+                // Two refs that snake-case to the same field name — bail.
+                return Ok(None);
+            }
+            properties.push(StructProperty {
+                name: field_name.clone(),
+                wire_name: base_name.clone(),
+                api_name: field_name,
+                rename: StructPropertyRename::Flatten,
+                state: StructPropertyState::Required,
+                description: None,
+                type_id,
+            });
+        }
+
+        // 2. Merge any inline subschemas (so e.g. `required:` arrays combine
+        //    correctly across multiple inline branches) and emit their
+        //    properties as ordinary, non-flattened fields.
+        if !inline_subschemas.is_empty() {
+            let merged = merge_all(&inline_subschemas, &self.definitions);
+            let Schema::Object(merged_obj) = merged else {
+                // Merging produced an unsatisfiable schema; fall back so the
+                // existing error path runs.
+                return Ok(None);
+            };
+
+            if let Some(validation) = merged_obj.object.as_deref() {
+                let tmp_type_name = get_type_name(&type_name, metadata);
+                let (inline_props, _deny) = self.struct_members(tmp_type_name, validation)?;
+                for prop in inline_props {
+                    if !used_names.insert(prop.name.clone()) {
+                        // Inline property collides with a flattened base
+                        // field name. The merge path can collapse them
+                        // correctly; compose cannot.
+                        return Ok(None);
+                    }
+                    properties.push(prop);
+                }
+            }
+            // Inline subschemas may have set `additionalProperties: false`,
+            // but `#[serde(flatten)]` is incompatible with
+            // `#[serde(deny_unknown_fields)]` so we drop it. This is a known
+            // semantic deviation of the Compose strategy.
+        }
+
+        Ok(Some((
+            TypeEntryStruct::from_metadata(
+                self,
+                type_name,
+                metadata,
+                properties,
+                false,
+                original_schema.clone(),
+            ),
+            metadata,
+        )))
+    }
+
+    /// Handle the "outer object with sibling allOf" pattern that commonly
+    /// comes out of Swagger 2.0 → OpenAPI 3.0 conversions:
+    ///
+    /// ```yaml
+    /// Agency:
+    ///   type: object
+    ///   properties:           # sibling of allOf, not inside it
+    ///     ticketingPolicy: ...
+    ///   allOf:
+    ///     - $ref: "#/definitions/GenericAgency"
+    ///     - type: object
+    /// ```
+    ///
+    /// In the default (Merge) strategy this falls through to
+    /// `try_merge_with_subschemas`, which copies `GenericAgency`'s fields
+    /// into `Agency`. With Compose enabled, we instead want
+    /// `Agency { #[serde(flatten)] pub generic_agency: GenericAgency,
+    /// ticketing_policy, ... }`.
+    ///
+    /// Returns `Ok(None)` when the shape isn't a clean compose candidate
+    /// (no `all_of`, no `$ref` subschemas, etc.) so the caller falls back
+    /// to the merge path.
+    fn try_compose_with_sibling_properties<'a>(
+        &mut self,
+        type_name: Name,
+        original_schema: &'a Schema,
+        metadata: &'a Option<Box<Metadata>>,
+        outer: &SchemaObject,
+        subschemas: Option<&SubschemaValidation>,
+    ) -> Result<Option<(TypeEntry, &'a Option<Box<Metadata>>)>> {
+        // We only compose when the subschemas slot is exclusively `all_of`.
+        // `any_of`/`one_of` and their combinations don't have a
+        // base-class-like semantics.
+        let Some(SubschemaValidation {
+            all_of: Some(all_of),
+            any_of: None,
+            one_of: None,
+            not: None,
+            if_schema: None,
+            then_schema: None,
+            else_schema: None,
+        }) = subschemas
+        else {
+            return Ok(None);
+        };
+
+        // Build a synthetic inline subschema from the outer object's local
+        // properties / required list (if any) so it can be merged with the
+        // inline subschemas inside the allOf array. We carry over `object`
+        // only — never `subschemas` or anything else from the outer schema,
+        // because those wouldn't apply to the merged inline portion.
+        let mut combined = all_of.clone();
+        if outer.object.is_some() {
+            combined.push(Schema::Object(SchemaObject {
+                instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+                object: outer.object.clone(),
+                ..Default::default()
+            }));
+        }
+
+        self.convert_all_of_compose(type_name, original_schema, metadata, &combined)
+    }
+
+    /// Returns `true` for schemas that describe an object with named
+    /// properties (or an empty object) and have no other instance type, no
+    /// `$ref`, and no nested `allOf` / `oneOf` / `anyOf` subschemas. These
+    /// are the inline subschemas a Compose-strategy `allOf` can fold into
+    /// the parent struct.
+    fn is_inline_object(obj: &SchemaObject) -> bool {
+        // No $ref (handled separately by the caller).
+        if obj.reference.is_some() {
+            return false;
+        }
+        // No nested subschemas; we only know how to compose flat objects.
+        if obj.subschemas.is_some() {
+            return false;
+        }
+        // Instance type must be absent or specifically `Object`. (An
+        // explicitly-listed [Object, Null] would already have been handled
+        // upstream by `maybe_option`.)
+        match obj.instance_type.as_ref() {
+            None => {}
+            Some(SingleOrVec::Single(it)) => {
+                if **it != InstanceType::Object {
+                    return false;
+                }
+            }
+            Some(SingleOrVec::Vec(its)) if its.iter().all(|it| *it == InstanceType::Object) => {}
+            Some(_) => return false,
+        }
+        true
+    }
+
     fn convert_all_of<'a>(
         &mut self,
         type_name: Name,
@@ -1382,6 +1655,17 @@ impl TypeSpace {
             self.maybe_singleton_subschema(type_name.clone(), original_schema, subschemas)
         {
             return Ok((ty, metadata));
+        }
+
+        // When the caller has opted into Compose semantics, try the
+        // `#[serde(flatten)]`-based composition before falling back to the
+        // historical merge-everything-and-emit-one-flat-struct path.
+        if matches!(self.settings.allof_strategy, crate::AllOfStrategy::Compose) {
+            if let Some(composed) =
+                self.convert_all_of_compose(type_name.clone(), original_schema, metadata, subschemas)?
+            {
+                return Ok(composed);
+            }
         }
 
         // In the general case, we merge all schemas in the array. The merged

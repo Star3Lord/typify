@@ -5,6 +5,7 @@
 #![deny(missing_docs)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use conversions::SchemaCache;
 use log::{debug, info};
@@ -298,7 +299,58 @@ impl From<syn::Type> for MapType {
 pub struct TypeSpaceSettings {
     type_mod: Option<String>,
     extra_derives: Vec<String>,
+    /// Derives emitted as `#[cfg_attr(feature = "...", derive(...))]` so
+    /// consumers can opt in / out via a Cargo feature. See
+    /// [`Self::with_conditional_derive`].
+    conditional_derives: Vec<ConditionalDerive>,
     extra_attrs: Vec<String>,
+    /// Attributes emitted as `#[cfg_attr(feature = "...", ...)]`. See
+    /// [`Self::with_conditional_attr`].
+    conditional_attrs: Vec<ConditionalAttr>,
+    /// Unconditional (i.e. not cfg-gated) attributes added by
+    /// [`Self::with_unconditional_attr`] / [`Self::with_unconditional_attr_for`]
+    /// / [`Self::with_unconditional_attr_at`]. Each carries an
+    /// [`AttrPosition`] that controls placement relative to `#[derive(...)]`.
+    unconditional_attrs: Vec<UnconditionalAttr>,
+    /// Unconditional derives added by [`Self::with_unconditional_derive`] /
+    /// [`Self::with_unconditional_derive_for`]. When any entry matches a
+    /// given type kind, the resulting `#[derive(...)]` list for that kind
+    /// is taken from this `Vec` (preserving insertion order) **instead** of
+    /// the historical sorted base set (`Debug`, `Clone`, `Serialize`,
+    /// `Deserialize`). This lets callers specify the exact ordering of the
+    /// derive list.
+    unconditional_derives: Vec<UnconditionalDerive>,
+    /// Policy for emitting `#[patch(name = "Option<{Inner}Patch>")]` on
+    /// `Option<{InnerStruct}>` struct fields. See
+    /// [`Self::with_deep_patches`].
+    deep_patches: DeepPatchPolicy,
+    /// Per-field predicate that takes precedence over [`Self::deep_patches`]
+    /// when set. See [`Self::with_deep_patch_filter`].
+    deep_patch_filter: Option<DeepPatchFilter>,
+    /// Policy for emitting `Option<T> + #[serde(default, skip_serializing_if =
+    /// ...)]` instead of `T + #[serde(default = "defaults::...")]` for
+    /// non-required struct fields that carry a schema-level `default:`
+    /// directive. See [`Self::with_defaulted_field_optionality`].
+    defaulted_field_optionality: DefaultedFieldOptionality,
+    /// When `true`, drop the per-field `#[serde(default,
+    /// skip_serializing_if = "::std::option::Option::is_none")]` on
+    /// `Option<T>` fields whose serde-attribute set would otherwise be
+    /// exactly that pair. See [`Self::with_elide_option_field_defaults`].
+    elide_option_field_defaults: bool,
+    /// When set, every generated struct emits
+    /// `#[serde(rename_all = "<case>")]` at the struct level and per-field
+    /// `#[serde(rename = "...")]` attributes covered by the case transform
+    /// are elided. See [`Self::with_struct_rename_all`].
+    struct_rename_all: Option<String>,
+    /// Optional per-field serde naming mode. When unset, typify preserves the
+    /// historical `rename` / `rename_all` behavior. When set, generated struct
+    /// fields carry explicit `rename` / `alias` pairs. See
+    /// [`Self::with_serde_field_case`].
+    serde_field_case: Option<SerdeFieldCase>,
+    /// When `true`, every generated enum lacking a schema-level `default:`
+    /// value gets an auto-generated `impl Default` that picks the first
+    /// Simple (unit) variant. See [`Self::with_enum_first_variant_default`].
+    enum_first_variant_default: bool,
     struct_builder: bool,
 
     unknown_crates: UnknownPolicy,
@@ -308,6 +360,298 @@ pub struct TypeSpaceSettings {
     patch: BTreeMap<String, TypeSpacePatch>,
     replace: BTreeMap<String, TypeSpaceReplace>,
     convert: Vec<TypeSpaceConversion>,
+
+    // Overrides for native types selected by JSON Schema `format`. When
+    // `None`, the upstream defaults (`::chrono::naive::NaiveDate`,
+    // `::chrono::DateTime<::chrono::offset::Utc>`, `::uuid::Uuid`) are used.
+    date_type: Option<String>,
+    date_time_type: Option<String>,
+    uuid_type: Option<String>,
+
+    // Wire-shape knobs that relax typify's "stricter than the wire"
+    // defaults; each is opt-in and defaults to the historical behavior.
+    unconstrained_string: bool,
+    unconstrained_int: bool,
+    array_optionality: ArrayOptionality,
+    default_bool_optionality: DefaultBoolOptionality,
+    allof_strategy: AllOfStrategy,
+
+    // When `true`, every generated type's doc comment includes a fenced
+    // JSON-Schema block under a `# JSON schema` heading. When `false`
+    // (the default), the doc comment contains only the human-readable
+    // description so IDE hovers stay readable. See
+    // [`Self::with_schema_in_docs`].
+    include_schema_in_docs: bool,
+}
+
+/// Per-field serde naming mode for generated struct properties.
+///
+/// This is intentionally opt-in so existing callers keep the legacy
+/// `rename` / `rename_all`-driven output unless they request a dual casing
+/// surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SerdeFieldCase {
+    /// Serialize exact schema property names and accept snake_case aliases
+    /// on input.
+    Wire,
+    /// Serialize snake_case property names and accept exact schema property
+    /// names on input.
+    Snake,
+}
+
+/// A `#[derive]` that is emitted as `#[cfg_attr(feature = "...", derive(...))]`
+/// so consumers can opt-in / opt-out of a derive via a Cargo feature.
+#[derive(Debug, Clone)]
+pub(crate) struct ConditionalDerive {
+    pub(crate) cfg: String,
+    pub(crate) derive: String,
+    pub(crate) kinds: TypeKindFilter,
+}
+
+/// An attribute that is emitted as `#[cfg_attr(feature = "...", ...)]`.
+#[derive(Debug, Clone)]
+pub(crate) struct ConditionalAttr {
+    pub(crate) cfg: String,
+    pub(crate) attr: String,
+    pub(crate) position: AttrPosition,
+    pub(crate) kinds: TypeKindFilter,
+}
+
+/// An unconditional (i.e. not cfg-gated) attribute emitted on every
+/// generated type matching `kinds`. The `position` controls placement
+/// relative to the main `#[derive(...)]` attribute on the type.
+#[derive(Debug, Clone)]
+pub(crate) struct UnconditionalAttr {
+    pub(crate) attr: String,
+    pub(crate) position: AttrPosition,
+    pub(crate) kinds: TypeKindFilter,
+}
+
+/// An unconditional derive emitted in the main `#[derive(...)]` list of
+/// every generated type matching `kinds`. When at least one
+/// [`UnconditionalDerive`] matches a given type kind, the resulting
+/// derive list **replaces** the historical sorted base set
+/// (`Debug`, `Clone`, `::serde::Serialize`, `::serde::Deserialize`) — see
+/// [`TypeSpaceSettings::with_unconditional_derive`] for details.
+#[derive(Debug, Clone)]
+pub(crate) struct UnconditionalDerive {
+    pub(crate) derive: String,
+    pub(crate) kinds: TypeKindFilter,
+}
+
+/// Where an emitted attribute is placed relative to the type's main
+/// `#[derive(...)]` attribute. This matters when matching a hand-written
+/// style that orders attributes deliberately — e.g. `serde_with`'s
+/// `skip_serializing_none` macro must precede the derive that consumes
+/// it, while `struct_patch`'s `#[patch(attribute(...))]` lines
+/// conventionally follow the derive that produces them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum AttrPosition {
+    /// Emitted *before* the main `#[derive(...)]` attribute (and before
+    /// any `#[cfg_attr(feature = ..., derive(...))]` lines). This is the
+    /// historical position used by `serde_with::skip_serializing_none`
+    /// and similar attribute-style macros that transform the upcoming
+    /// `#[derive]`.
+    #[default]
+    BeforeDerive,
+    /// Emitted *after* the main `#[derive(...)]` attribute and after any
+    /// type-level `#[serde(...)]` line. Use this for attributes that
+    /// configure the just-applied derive — e.g.
+    /// `#[patch(attribute(...))]` lines that ride the
+    /// `#[derive(struct_patch::Patch)]` macro.
+    AfterDerive,
+}
+
+/// Selector for which generated type categories a conditional derive or
+/// attribute should be applied to.
+///
+/// Some derives only make sense for one kind of generated type — for example
+/// `struct_patch::Patch` is a `#[proc_macro_derive]` that panics on enums.
+/// Use [`TypeKindFilter`] to scope a derive to the kinds it actually
+/// supports.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TypeKindFilter {
+    /// Apply to generated `pub struct` declarations.
+    pub structs: bool,
+    /// Apply to generated `pub enum` declarations.
+    pub enums: bool,
+    /// Apply to generated `#[serde(transparent)]` newtypes.
+    pub newtypes: bool,
+}
+
+impl TypeKindFilter {
+    /// Apply to all categories (the historical default).
+    pub const ALL: Self = Self {
+        structs: true,
+        enums: true,
+        newtypes: true,
+    };
+
+    /// Apply only to structs. Use this for derives such as
+    /// `struct_patch::Patch` that the proc-macro forbids on enums.
+    pub const STRUCTS: Self = Self {
+        structs: true,
+        enums: false,
+        newtypes: false,
+    };
+
+    /// Apply only to enums.
+    pub const ENUMS: Self = Self {
+        structs: false,
+        enums: true,
+        newtypes: false,
+    };
+
+    /// Apply only to newtypes.
+    pub const NEWTYPES: Self = Self {
+        structs: false,
+        enums: false,
+        newtypes: true,
+    };
+
+    /// `true` if this filter targets the given [`TypeKind`].
+    pub(crate) fn matches(&self, kind: TypeKind) -> bool {
+        match kind {
+            TypeKind::Struct => self.structs,
+            TypeKind::Enum => self.enums,
+            TypeKind::Newtype => self.newtypes,
+        }
+    }
+}
+
+/// The category of a generated type, used to filter conditional and
+/// unconditional derives / attributes against the configured
+/// [`TypeKindFilter`]s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypeKind {
+    Struct,
+    Enum,
+    Newtype,
+}
+
+/// Controls how arrays that are *not* in the schema's `required` list are
+/// emitted on a generated struct.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub enum ArrayOptionality {
+    /// Bare `Vec<T>` with `#[serde(default, skip_serializing_if =
+    /// "Vec::is_empty")]`. This is the historical typify behavior.
+    #[default]
+    Bare,
+    /// Wrap in `Option<Vec<T>>` with `#[serde(default, skip_serializing_if =
+    /// "Option::is_none")]`, distinguishing an absent array from an empty
+    /// array on the wire.
+    OptionalIfNotRequired,
+}
+
+/// Controls how boolean properties that have a schema-level `default:` are
+/// emitted on a generated struct.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub enum DefaultBoolOptionality {
+    /// Bare `bool` with `#[serde(default)]`. This is the historical typify
+    /// behavior.
+    #[default]
+    Bare,
+    /// Wrap in `Option<bool>` when not required, distinguishing "field
+    /// absent" from "field explicitly false".
+    AlwaysOption,
+}
+
+/// Controls whether non-required struct fields carrying a schema-level
+/// `default:` directive are emitted as bare `T` with `#[serde(default =
+/// "defaults::...")]` or as `Option<T>` with the standard
+/// `#[serde(default, skip_serializing_if = "Option::is_none")]` shape.
+///
+/// `Bare` reproduces typify's historical behavior: the schema default is
+/// lifted into the generated type via a `defaults::` helper function and
+/// the field stays bare. `AlwaysOption` drops the schema default and
+/// wraps the field in `Option<T>`, which is what every other non-required
+/// field looks like. The `defaults::` helper for that field is not
+/// emitted at all under `AlwaysOption` — there's no caller for it.
+///
+/// `bool` fields are governed by [`DefaultBoolOptionality`] instead, so
+/// this knob deliberately does not affect them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub enum DefaultedFieldOptionality {
+    /// Lift the schema default into the type via a generated `defaults::`
+    /// helper. Historical typify behavior.
+    #[default]
+    Bare,
+    /// Suppress the schema default and wrap the field in `Option<T>`.
+    AlwaysOption,
+}
+
+/// Controls whether `#[patch(name = "Option<{Inner}Patch>")]` is emitted
+/// above struct fields of type `Option<{InnerStruct}>` so the
+/// `struct_patch::Patch` derive produces a deep partial-merge shape.
+///
+/// `Off` reproduces upstream `struct_patch` behavior: an `Option<T>` field
+/// becomes `Option<Option<T>>` in the patch type, so a partial sub-object
+/// overwrites unspecified fields with `Default::default()`.
+/// `AllOptionStructs` gives every `Option<{InnerStruct}>` field the
+/// `#[patch(name = ...)]` rewrite so its patch field is
+/// `Option<{Inner}Patch>` — a true deep partial-merge.
+///
+/// The knob only fires for fields whose Rust type is exactly
+/// `Option<{InnerStruct}>` (or `Option<Box<{InnerStruct}>>`). Fields
+/// that carry `#[serde(flatten)]`, are `Vec<...>`, or whose inner type
+/// is an enum / newtype / primitive are skipped — those are not
+/// Patch-able and the rewrite would not type-check.
+///
+/// To target a hand-curated subset of fields rather than every
+/// `Option<{InnerStruct}>`, use
+/// [`TypeSpaceSettings::with_deep_patch_filter`] in addition or instead.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub enum DeepPatchPolicy {
+    /// Do not emit `#[patch(name = ...)]`. Historical behavior.
+    #[default]
+    Off,
+    /// Emit `#[patch(name = "Option<{Inner}Patch>")]` above every
+    /// `Option<{InnerStruct}>` field whose `{InnerStruct}` is a generated
+    /// struct.
+    AllOptionStructs,
+}
+
+/// Closure signature used by [`DeepPatchFilter`]: `(owner_struct_name,
+/// field_name, inner_struct_name) -> bool`. Stored behind an `Arc` so
+/// the enclosing [`TypeSpaceSettings`] can stay `Clone`.
+type DeepPatchFilterFn = dyn Fn(&str, &str, &str) -> bool + Send + Sync;
+
+/// User-supplied predicate that decides per `(owner_struct_name,
+/// field_name, inner_struct_name)` whether to emit `#[patch(name =
+/// "Option<{Inner}Patch>")]` for that field. Stored as an `Arc<dyn Fn>`
+/// so the enclosing [`TypeSpaceSettings`] stays `Clone`.
+#[derive(Clone)]
+pub struct DeepPatchFilter(Arc<DeepPatchFilterFn>);
+
+impl DeepPatchFilter {
+    /// Whether this filter accepts the given field for deep-patch
+    /// emission.
+    pub(crate) fn accepts(&self, owner: &str, field: &str, inner: &str) -> bool {
+        (self.0)(owner, field, inner)
+    }
+}
+
+impl std::fmt::Debug for DeepPatchFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DeepPatchFilter(<closure>)")
+    }
+}
+
+/// Controls how schema `allOf` compositions are rendered.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub enum AllOfStrategy {
+    /// Merge each subschema into a single flat schema and emit one struct
+    /// containing the union of all properties (typify's historical
+    /// behavior).
+    #[default]
+    Merge,
+    /// For the common `allOf: [<$ref to Base>, type:object + properties:…]`
+    /// pattern, emit a struct whose `Base` reference becomes a
+    /// `#[serde(flatten)] pub <snake_case_base>: Base` field while the
+    /// inline properties remain as ordinary fields. Falls back to the
+    /// `Merge` behavior for shapes that don't permit clean composition
+    /// (multiple colliding names, non-object subschemas, etc.).
+    Compose,
 }
 
 #[derive(Debug, Clone)]
@@ -560,6 +904,455 @@ impl TypeSpaceSettings {
     pub fn with_map_type<T: Into<MapType>>(&mut self, map_type: T) -> &mut Self {
         self.map_type = map_type.into();
         self
+    }
+
+    /// Override the Rust type used for `{"type":"string","format":"date"}`
+    /// schemas. The default is `::chrono::naive::NaiveDate`. Setting this to
+    /// e.g. `::std::string::String` or `::time::Date` removes the dependency
+    /// on chrono.
+    ///
+    /// The given string must be a fully-qualified Rust path. The type is
+    /// emitted as a "native" type, so it should already implement `Debug`,
+    /// `Clone`, `Serialize`, and `Deserialize` in a way that round-trips an
+    /// ISO-8601 date string.
+    pub fn with_date_type<S: ToString>(&mut self, type_name: S) -> &mut Self {
+        self.date_type = Some(type_name.to_string());
+        self
+    }
+
+    /// Override the Rust type used for
+    /// `{"type":"string","format":"date-time"}` schemas. The default is
+    /// `::chrono::DateTime<::chrono::offset::Utc>`. See
+    /// [`Self::with_date_type`] for caveats.
+    pub fn with_date_time_type<S: ToString>(&mut self, type_name: S) -> &mut Self {
+        self.date_time_type = Some(type_name.to_string());
+        self
+    }
+
+    /// Override the Rust type used for `{"type":"string","format":"uuid"}`
+    /// schemas. The default is `::uuid::Uuid`.
+    pub fn with_uuid_type<S: ToString>(&mut self, type_name: S) -> &mut Self {
+        self.uuid_type = Some(type_name.to_string());
+        self
+    }
+
+    /// When `true`, JSON Schema strings carrying `pattern:`, `minLength:`,
+    /// or `maxLength:` constraints are emitted as plain `String` instead of
+    /// a `#[serde(transparent)]` newtype that validates the constraint on
+    /// construction / deserialization. Defaults to `false`.
+    ///
+    /// Enable this for APIs where the constraint should be enforced by the
+    /// service / consumer rather than baked into the type system. It also
+    /// avoids one transparent newtype per `<Struct><Field>` combination,
+    /// which is a common source of name explosion for large specs.
+    pub fn with_unconstrained_string(&mut self, unconstrained: bool) -> &mut Self {
+        self.unconstrained_string = unconstrained;
+        self
+    }
+
+    /// When `true`, integer schemas with `minimum: 1` are emitted using
+    /// the plain `i32`/`i64`/etc. type instead of the corresponding
+    /// `::std::num::NonZeroU*` type. Defaults to `false`.
+    ///
+    /// Enable this when the consuming code expects plain integers and the
+    /// "minimum: 1" constraint will be enforced elsewhere.
+    pub fn with_unconstrained_int(&mut self, unconstrained: bool) -> &mut Self {
+        self.unconstrained_int = unconstrained;
+        self
+    }
+
+    /// Control how arrays that are not in a struct's `required` list are
+    /// emitted. See [`ArrayOptionality`].
+    pub fn with_array_optionality(&mut self, mode: ArrayOptionality) -> &mut Self {
+        self.array_optionality = mode;
+        self
+    }
+
+    /// Control how booleans that carry a schema-level `default:` are emitted
+    /// on non-required struct properties. See [`DefaultBoolOptionality`].
+    pub fn with_default_bool_optionality(&mut self, mode: DefaultBoolOptionality) -> &mut Self {
+        self.default_bool_optionality = mode;
+        self
+    }
+
+    /// Control how non-required, non-bool struct properties carrying a
+    /// schema-level `default:` directive are emitted. See
+    /// [`DefaultedFieldOptionality`].
+    pub fn with_defaulted_field_optionality(
+        &mut self,
+        mode: DefaultedFieldOptionality,
+    ) -> &mut Self {
+        self.defaulted_field_optionality = mode;
+        self
+    }
+
+    /// Returns the configured defaulted-field-optionality mode.
+    pub(crate) fn defaulted_field_optionality(&self) -> DefaultedFieldOptionality {
+        self.defaulted_field_optionality
+    }
+
+    /// Drop the per-field `#[serde(default, skip_serializing_if =
+    /// "::std::option::Option::is_none")]` on `Option<T>` fields whose
+    /// serde-attribute set would otherwise be exactly that canonical
+    /// pair. Defaults to `false` (typify's historical shape).
+    ///
+    /// The elision is safe whenever the enclosing struct already carries
+    /// `#[serde_with::skip_serializing_none]` (which the caller is
+    /// expected to enable separately, e.g. via
+    /// [`Self::with_unconditional_attr_for`]): that attribute handles
+    /// the serialize-omission, and serde's built-in `Option<T>`
+    /// deserialization treats a missing JSON key as `None` without any
+    /// `serde(default)` directive. The per-field line is therefore
+    /// fully redundant in that setup; turning this knob on removes the
+    /// visual noise.
+    ///
+    /// Only the canonical `default + skip_serializing_if =
+    /// "::std::option::Option::is_none"` pair is elided. Fields with a
+    /// named-default fn (`default = "defaults::..."`), a custom
+    /// `skip_serializing_if`, `serde(flatten)`, or a non-`Option<T>`
+    /// type (e.g. `Vec<T>`, `bool`, primitives) are left untouched. A
+    /// `serde(rename = "...")` line is preserved alongside the elision
+    /// (the rename is independent of the default / skip-serializing
+    /// pair).
+    pub fn with_elide_option_field_defaults(&mut self, value: bool) -> &mut Self {
+        self.elide_option_field_defaults = value;
+        self
+    }
+
+    /// Returns whether per-field `#[serde(default, skip_serializing_if =
+    /// "Option::is_none")]` elision is enabled on `Option<T>` fields.
+    pub(crate) fn elide_option_field_defaults(&self) -> bool {
+        self.elide_option_field_defaults
+    }
+
+    /// Control whether `#[patch(name = "Option<{Inner}Patch>")]` is
+    /// emitted above struct fields of type `Option<{InnerStruct}>` so
+    /// that `struct_patch::Patch` produces a deep partial-merge shape.
+    /// See [`DeepPatchPolicy`].
+    ///
+    /// This is the bulk knob. To target a hand-curated subset, also
+    /// configure [`Self::with_deep_patch_filter`]; when both are set the
+    /// filter takes precedence.
+    pub fn with_deep_patches(&mut self, policy: DeepPatchPolicy) -> &mut Self {
+        self.deep_patches = policy;
+        self
+    }
+
+    /// Set a per-field predicate that decides whether to emit
+    /// `#[patch(name = "Option<{Inner}Patch>")]` for a given field.
+    ///
+    /// The predicate receives `(owner_struct_name, field_name,
+    /// inner_struct_name)` — every string in Rust identifier form (the
+    /// owner / inner are the Pascal-case sanitized type names; the
+    /// field is the snake_case Rust field name). Return `true` to emit
+    /// the deep-patch line; return `false` to skip it.
+    ///
+    /// When set, the filter takes precedence over
+    /// [`Self::with_deep_patches`]: every candidate field is asked the
+    /// filter first, and only if the filter allows emission for that
+    /// field does any line appear.
+    pub fn with_deep_patch_filter<F>(&mut self, filter: F) -> &mut Self
+    where
+        F: Fn(&str, &str, &str) -> bool + Send + Sync + 'static,
+    {
+        self.deep_patch_filter = Some(DeepPatchFilter(Arc::new(filter)));
+        self
+    }
+
+    /// Returns the configured bulk deep-patch policy.
+    pub(crate) fn deep_patches(&self) -> DeepPatchPolicy {
+        self.deep_patches
+    }
+
+    /// Returns the configured per-field deep-patch filter, if any.
+    pub(crate) fn deep_patch_filter(&self) -> Option<&DeepPatchFilter> {
+        self.deep_patch_filter.as_ref()
+    }
+
+    /// Control how schema `allOf` compositions are rendered. See
+    /// [`AllOfStrategy`].
+    pub fn with_allof_strategy(&mut self, strategy: AllOfStrategy) -> &mut Self {
+        self.allof_strategy = strategy;
+        self
+    }
+
+    /// When `true`, every generated type's doc comment includes the full
+    /// pretty-printed JSON Schema under a `# JSON schema` heading and a
+    /// fenced `json` code block, in addition to the schema's `description`.
+    /// When `false` (the default), only the description is emitted.
+    ///
+    /// The JSON-schema block renders fine in `cargo doc`, but the simpler
+    /// HTML renderer used by rust-analyzer hover popovers breaks on the
+    /// historical `<details><summary>JSON schema</summary>...</details>`
+    /// shape: CommonMark splits the disclosure widget into two raw-HTML
+    /// siblings around the fenced code block, which then loses syntax
+    /// highlighting and styling. Defaulting this off keeps hover popovers
+    /// readable; turning it on emits a pure markdown heading + fenced code
+    /// block instead, which renders cleanly in both rustdoc and hover
+    /// tooltips.
+    pub fn with_schema_in_docs(&mut self, value: bool) -> &mut Self {
+        self.include_schema_in_docs = value;
+        self
+    }
+
+    /// Add a derive macro that is emitted as
+    /// `#[cfg_attr(feature = "<cfg>", derive(<derive>))]` on every generated
+    /// struct, enum, and newtype. Pair this with a matching Cargo feature in
+    /// the consuming crate.
+    ///
+    /// To restrict the derive to a subset of generated type categories (e.g.
+    /// `struct_patch::Patch`, which only supports structs), use
+    /// [`Self::with_conditional_derive_for`].
+    pub fn with_conditional_derive<C: ToString, D: ToString>(
+        &mut self,
+        cfg: C,
+        derive: D,
+    ) -> &mut Self {
+        self.with_conditional_derive_for(cfg, derive, TypeKindFilter::ALL)
+    }
+
+    /// Add a derive macro that is emitted as
+    /// `#[cfg_attr(feature = "<cfg>", derive(<derive>))]` only on the
+    /// generated type categories matching `kinds`. This is the form to use
+    /// for derives that don't apply uniformly across structs, enums, and
+    /// newtypes — e.g. `struct_patch::Patch` (structs only).
+    pub fn with_conditional_derive_for<C: ToString, D: ToString>(
+        &mut self,
+        cfg: C,
+        derive: D,
+        kinds: TypeKindFilter,
+    ) -> &mut Self {
+        let cfg = cfg.to_string();
+        let derive = derive.to_string();
+        if !self
+            .conditional_derives
+            .iter()
+            .any(|c| c.cfg == cfg && c.derive == derive)
+        {
+            self.conditional_derives
+                .push(ConditionalDerive { cfg, derive, kinds });
+        }
+        self
+    }
+
+    /// Add an attribute that is emitted as
+    /// `#[cfg_attr(feature = "<cfg>", <attr>)]` on every generated struct,
+    /// enum, and newtype. Use [`Self::with_conditional_attr_for`] to scope
+    /// the attribute to a subset of categories.
+    pub fn with_conditional_attr<C: ToString, A: ToString>(&mut self, cfg: C, attr: A) -> &mut Self {
+        self.with_conditional_attr_for(cfg, attr, TypeKindFilter::ALL)
+    }
+
+    /// Add an attribute that is emitted as
+    /// `#[cfg_attr(feature = "<cfg>", <attr>)]` only on the generated type
+    /// categories matching `kinds`. Useful for attributes like
+    /// `#[serde_with::skip_serializing_none]`, which only modifies struct
+    /// field serialization.
+    ///
+    /// The attribute is emitted before the main `#[derive(...)]` (i.e.
+    /// [`AttrPosition::BeforeDerive`]). Use
+    /// [`Self::with_conditional_attr_at`] to place it after the derive.
+    pub fn with_conditional_attr_for<C: ToString, A: ToString>(
+        &mut self,
+        cfg: C,
+        attr: A,
+        kinds: TypeKindFilter,
+    ) -> &mut Self {
+        self.with_conditional_attr_at(cfg, attr, AttrPosition::BeforeDerive, kinds)
+    }
+
+    /// Add an attribute that is emitted as
+    /// `#[cfg_attr(feature = "<cfg>", <attr>)]` at the given `position`
+    /// relative to the main `#[derive(...)]`, scoped to type categories
+    /// matching `kinds`.
+    ///
+    /// Use this for attributes that must appear after the derive (e.g.
+    /// `#[patch(attribute(...))]` lines that ride the
+    /// `#[derive(struct_patch::Patch)]` macro) where the historical
+    /// "BeforeDerive" position would be incorrect.
+    pub fn with_conditional_attr_at<C: ToString, A: ToString>(
+        &mut self,
+        cfg: C,
+        attr: A,
+        position: AttrPosition,
+        kinds: TypeKindFilter,
+    ) -> &mut Self {
+        let cfg = cfg.to_string();
+        let attr = attr.to_string();
+        if !self
+            .conditional_attrs
+            .iter()
+            .any(|c| c.cfg == cfg && c.attr == attr && c.position == position)
+        {
+            self.conditional_attrs.push(ConditionalAttr {
+                cfg,
+                attr,
+                position,
+                kinds,
+            });
+        }
+        self
+    }
+
+    /// Add an attribute that is emitted **unconditionally** (no `cfg_attr`
+    /// gate) on every generated type. The attribute is placed before the
+    /// main `#[derive(...)]` (i.e. [`AttrPosition::BeforeDerive`]).
+    ///
+    /// Use this for attribute-style macros like
+    /// `#[serde_with::skip_serializing_none]` that always belong on the
+    /// generated type, no Cargo feature involved.
+    ///
+    /// To scope by type kind or place the attribute after the derive, see
+    /// [`Self::with_unconditional_attr_for`] /
+    /// [`Self::with_unconditional_attr_at`].
+    pub fn with_unconditional_attr<A: ToString>(&mut self, attr: A) -> &mut Self {
+        self.with_unconditional_attr_at(attr, AttrPosition::BeforeDerive, TypeKindFilter::ALL)
+    }
+
+    /// Add an unconditional attribute scoped to the given type kinds. The
+    /// attribute is emitted before the main `#[derive(...)]`.
+    pub fn with_unconditional_attr_for<A: ToString>(
+        &mut self,
+        attr: A,
+        kinds: TypeKindFilter,
+    ) -> &mut Self {
+        self.with_unconditional_attr_at(attr, AttrPosition::BeforeDerive, kinds)
+    }
+
+    /// Add an unconditional attribute at the given `position` relative to
+    /// the main `#[derive(...)]`, scoped to the given `kinds`.
+    ///
+    /// Multiple calls preserve insertion order, so a deliberately ordered
+    /// block — e.g. several `#[patch(attribute(...))]` lines after the
+    /// derive — can be assembled by calling this once per line.
+    pub fn with_unconditional_attr_at<A: ToString>(
+        &mut self,
+        attr: A,
+        position: AttrPosition,
+        kinds: TypeKindFilter,
+    ) -> &mut Self {
+        let attr = attr.to_string();
+        if !self
+            .unconditional_attrs
+            .iter()
+            .any(|u| u.attr == attr && u.position == position && u.kinds == kinds)
+        {
+            self.unconditional_attrs.push(UnconditionalAttr {
+                attr,
+                position,
+                kinds,
+            });
+        }
+        self
+    }
+
+    /// Add a derive macro to the main `#[derive(...)]` list of every
+    /// generated type. Multiple calls append derives in **insertion
+    /// order**.
+    ///
+    /// # Important: this replaces the default base derive set
+    ///
+    /// As soon as any unconditional derive is registered for a given
+    /// type kind, the historical base set
+    /// (`Debug`, `Clone`, `::serde::Serialize`, `::serde::Deserialize`) is
+    /// **suppressed** for that kind — the caller takes responsibility for
+    /// listing every desired derive. This is the only way to control the
+    /// exact ordering of the derive list (e.g. to match a hand-written
+    /// style where `Default` precedes `Serialize` rather than following it
+    /// alphabetically).
+    ///
+    /// For kinds with no registered unconditional derives, the legacy
+    /// behavior (base set + `with_derive` extras, lexicographically
+    /// ordered) is preserved.
+    pub fn with_unconditional_derive<D: ToString>(&mut self, derive: D) -> &mut Self {
+        self.with_unconditional_derive_for(derive, TypeKindFilter::ALL)
+    }
+
+    /// Add a derive scoped to the given type kinds. See
+    /// [`Self::with_unconditional_derive`] for the replacement-vs-extend
+    /// semantics.
+    pub fn with_unconditional_derive_for<D: ToString>(
+        &mut self,
+        derive: D,
+        kinds: TypeKindFilter,
+    ) -> &mut Self {
+        let derive = derive.to_string();
+        if !self
+            .unconditional_derives
+            .iter()
+            .any(|u| u.derive == derive && u.kinds == kinds)
+        {
+            self.unconditional_derives
+                .push(UnconditionalDerive { derive, kinds });
+        }
+        self
+    }
+
+    /// Configure a struct-level `#[serde(rename_all = "<case>")]`
+    /// attribute on every generated struct.
+    ///
+    /// In addition to emitting the attribute, this also enables an
+    /// elision pass on per-field `#[serde(rename = "...")]`: whenever the
+    /// field's original wire name equals the `<case>` transform of the
+    /// snake-cased Rust field name, the per-field rename is dropped (the
+    /// struct-level `rename_all` covers it). This keeps the generated
+    /// output legible — only fields whose wire name disagrees with the
+    /// chosen `rename_all` keep an explicit `rename`.
+    ///
+    /// Supported values are the standard serde set:
+    /// `"lowercase"`, `"UPPERCASE"`, `"PascalCase"`, `"camelCase"`,
+    /// `"snake_case"`, `"SCREAMING_SNAKE_CASE"`, `"kebab-case"`,
+    /// `"SCREAMING-KEBAB-CASE"`.
+    pub fn with_struct_rename_all<S: ToString>(&mut self, case: S) -> &mut Self {
+        self.struct_rename_all = Some(case.to_string());
+        self
+    }
+
+    /// Returns the configured struct-level `rename_all` case, if any.
+    pub(crate) fn struct_rename_all(&self) -> Option<&str> {
+        self.struct_rename_all.as_deref()
+    }
+
+    /// Configure explicit per-field serde names for a generated casing
+    /// surface. This replaces the struct-level `rename_all` mechanism for
+    /// field names: each property emits `rename` and, when distinct,
+    /// `alias`. See [`SerdeFieldCase`].
+    pub fn with_serde_field_case(&mut self, case: SerdeFieldCase) -> &mut Self {
+        self.serde_field_case = Some(case);
+        self
+    }
+
+    /// Returns the configured explicit per-field serde naming mode, if any.
+    pub(crate) fn serde_field_case(&self) -> Option<SerdeFieldCase> {
+        self.serde_field_case
+    }
+
+    /// When `true`, every generated enum that lacks a schema-level `default:`
+    /// value will get an auto-generated
+    /// `impl Default` block whose value is the first Simple (unit-like)
+    /// variant in the enum's declared order.
+    ///
+    /// This is the simplest way to make required-enum struct fields work
+    /// with a struct that derives `Default`: every enum becomes
+    /// `Default`-able, so any struct that derives `Default` (whether
+    /// directly or via the [`Self::with_unconditional_derive`] mechanism)
+    /// will satisfy its trait bounds for required enum fields.
+    ///
+    /// Enums that already declare a schema-level default are unaffected —
+    /// the generated impl already points at the schema-mandated value.
+    ///
+    /// Enums whose variants are *all* non-Simple (tuple / struct
+    /// variants) cannot be defaulted to a unit variant; for those the
+    /// auto-impl is skipped and `Default` remains unimplemented.
+    pub fn with_enum_first_variant_default(&mut self, value: bool) -> &mut Self {
+        self.enum_first_variant_default = value;
+        self
+    }
+
+    /// Returns whether the enum first-variant Default auto-emission is
+    /// enabled.
+    pub(crate) fn enum_first_variant_default(&self) -> bool {
+        self.enum_first_variant_default
     }
 }
 
@@ -863,6 +1656,12 @@ impl TypeSpace {
         self.uses_uuid
     }
 
+    /// Whether the schema-in-docs knob is on; controls whether
+    /// [`crate::type_entry::make_doc`] embeds the full JSON Schema.
+    pub(crate) fn include_schema_in_docs(&self) -> bool {
+        self.settings.include_schema_in_docs
+    }
+
     /// Iterate over all types including those defined in this [TypeSpace] and
     /// those referred to by those types.
     pub fn iter_types(&self) -> impl Iterator<Item = Type<'_>> {
@@ -875,9 +1674,128 @@ impl TypeSpace {
     /// All code for processed types.
     pub fn to_stream(&self) -> TokenStream {
         let mut output = OutputSpace::default();
+        self.fill_error_mod(&mut output);
+        self.id_to_entry
+            .values()
+            .for_each(|type_entry| type_entry.output(self, &mut output));
+        self.fill_defaults_mod(&mut output);
+        output.into_stream()
+    }
 
-        // Add the error type we use for conversions; it's fine if this is
-        // unused.
+    /// All code for processed types, grouped into per-module blocks.
+    ///
+    /// `partition` maps each generated type's Rust name (as returned by
+    /// [`Type::name()`]) to a target module name. Types not present in
+    /// `partition` are placed in `default_module`. The resulting
+    /// [`TokenStream`] is a sequence of `pub mod <name> { ... }` blocks
+    /// — one per distinct destination module — produced in stable order
+    /// (lexicographically by module name).
+    ///
+    /// `imports_per_module` lets the caller inject a preamble of `use`
+    /// statements at the top of each module body. Use this for
+    /// cross-module references (e.g. `use super::shared::*;` so types in
+    /// per-operation modules can name shared types directly) and for
+    /// bringing trait paths into scope so bare derives resolve (e.g.
+    /// `use serde::{Serialize, Deserialize};`).
+    ///
+    /// The `error` module (containing `ConversionError`) is emitted as
+    /// a submodule inside every partition so that any per-module
+    /// `self::error::ConversionError` reference in a bespoke enum impl
+    /// resolves correctly. The shared `defaults` module is likewise
+    /// duplicated into every partition.
+    pub fn to_stream_partitioned(
+        &self,
+        partition: &std::collections::HashMap<String, String>,
+        default_module: &str,
+        imports_per_module: &std::collections::HashMap<String, TokenStream>,
+    ) -> TokenStream {
+        // Bucket each emitted type into a per-module `OutputSpace`.
+        let mut per_module: BTreeMap<String, OutputSpace> = BTreeMap::new();
+
+        // Ensure the default module exists even if the partition map
+        // happens to cover every generated type.
+        per_module.entry(default_module.to_string()).or_default();
+
+        for type_entry in self.id_to_entry.values() {
+            // Only Struct/Enum/Newtype produce a top-level `pub` item;
+            // everything else is a structural helper (Option, Vec,
+            // Reference, …) and skipping it matches what
+            // `TypeEntry::output` already does.
+            match &type_entry.details {
+                type_entry::TypeEntryDetails::Struct(_)
+                | type_entry::TypeEntryDetails::Enum(_)
+                | type_entry::TypeEntryDetails::Newtype(_) => {}
+                _ => continue,
+            }
+            let name = type_entry.type_name(self);
+            let module = partition
+                .get(&name)
+                .map(String::as_str)
+                .unwrap_or(default_module)
+                .to_string();
+            let space = per_module.entry(module).or_default();
+            type_entry.output(self, space);
+        }
+
+        // Every module gets its own `error` submodule so that
+        // `self::error::ConversionError` references in bespoke enum impls
+        // resolve to the right path no matter which module the enum
+        // ended up in.
+        //
+        // The shared default-fn helpers (e.g. `default_u64`) are likewise
+        // baked into every partition's `defaults` submodule alongside any
+        // type-local default fns emitted during `type_entry.output()`.
+        // Duplicating the helpers is preferable to cross-module imports,
+        // which would collide with the local `pub mod defaults` blocks;
+        // the helpers are tiny so the duplication is negligible.
+        for space in per_module.values_mut() {
+            self.fill_error_mod(space);
+            self.fill_defaults_mod(space);
+        }
+
+        let mods = per_module.into_iter().map(|(name, output_space)| {
+            let mod_ident = format_ident!("{}", name);
+            let mod_body = output_space.into_stream();
+            let preamble = imports_per_module.get(&name).cloned().unwrap_or_default();
+            quote! {
+                pub mod #mod_ident {
+                    #preamble
+                    #mod_body
+                }
+            }
+        });
+
+        quote! {
+            #(#mods)*
+        }
+    }
+
+    /// Map from the original schema definition key (e.g. an OpenAPI
+    /// `components/schemas/<key>` name or a JSON Schema `definitions`
+    /// entry) to the Rust type name typify emits for that schema.
+    ///
+    /// Use this when computing a partition for
+    /// [`Self::to_stream_partitioned`] from reachability data keyed by the
+    /// original schema names: the value returned here matches
+    /// [`Type::name()`] exactly, so the partition map can be keyed
+    /// correctly without re-implementing typify's Pascal-case
+    /// sanitization rules.
+    pub fn definition_rust_names(&self) -> Vec<(String, String)> {
+        self.ref_to_id
+            .iter()
+            .filter_map(|(key, type_id)| {
+                let RefKey::Def(schema_key) = key else {
+                    return None;
+                };
+                let entry = self.id_to_entry.get(type_id)?;
+                Some((schema_key.clone(), entry.type_name(self)))
+            })
+            .collect()
+    }
+
+    /// Add the `ConversionError` submodule into `output`; it's fine if this
+    /// is unused.
+    fn fill_error_mod(&self, output: &mut OutputSpace) {
         output.add_item(
             output::OutputSpaceMod::Error,
             "",
@@ -913,18 +1831,13 @@ impl TypeSpace {
                 }
             },
         );
+    }
 
-        // Add all types.
-        self.id_to_entry
-            .values()
-            .for_each(|type_entry| type_entry.output(self, &mut output));
-
-        // Add all shared default functions.
+    /// Add every shared default-fn into `output`'s `defaults` submodule.
+    fn fill_defaults_mod(&self, output: &mut OutputSpace) {
         self.defaults
             .iter()
             .for_each(|x| output.add_item(output::OutputSpaceMod::Defaults, "", x.into()));
-
-        output.into_stream()
     }
 
     /// Allocated the next TypeId.

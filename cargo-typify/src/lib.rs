@@ -8,7 +8,10 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Args};
 use color_eyre::eyre::{Context, Result};
-use typify::{CrateVers, TypeSpace, TypeSpaceSettings, UnknownPolicy};
+use typify::{
+    AllOfStrategy, ArrayOptionality, CrateVers, DeepPatchPolicy, DefaultBoolOptionality,
+    DefaultedFieldOptionality, TypeSpace, TypeSpaceSettings, UnknownPolicy,
+};
 
 /// A CLI for the `typify` crate that converts JSON Schema files to Rust code.
 #[derive(Args)]
@@ -61,6 +64,133 @@ pub struct CliArgs {
         value_parser = ["generate", "allow", "deny"]
     )]
     unknown_crates: Option<String>,
+
+    /// Override the Rust type used for `{"type":"string","format":"date"}`
+    /// schemas. The default is `::chrono::naive::NaiveDate`. Setting this
+    /// to e.g. `::std::string::String` removes the chrono dependency.
+    #[arg(long = "date-type", value_name = "PATH")]
+    date_type: Option<String>,
+
+    /// Override the Rust type used for
+    /// `{"type":"string","format":"date-time"}` schemas. The default is
+    /// `::chrono::DateTime<::chrono::offset::Utc>`.
+    #[arg(long = "date-time-type", value_name = "PATH")]
+    date_time_type: Option<String>,
+
+    /// Override the Rust type used for `{"type":"string","format":"uuid"}`
+    /// schemas. The default is `::uuid::Uuid`.
+    #[arg(long = "uuid-type", value_name = "PATH")]
+    uuid_type: Option<String>,
+
+    /// Emit plain `String` instead of a per-field `#[serde(transparent)]`
+    /// newtype for strings carrying `pattern` / `minLength` / `maxLength`
+    /// constraints. Validation must then be enforced elsewhere.
+    #[arg(long = "unconstrained-string", default_value = "false")]
+    unconstrained_string: bool,
+
+    /// Emit plain integer types (e.g. `i32`) instead of the corresponding
+    /// `NonZeroU*` for integer schemas with `minimum: 1`.
+    #[arg(long = "unconstrained-int", default_value = "false")]
+    unconstrained_int: bool,
+
+    /// Control how non-required array properties are rendered:
+    /// `bare` (default) is `Vec<T>` with `#[serde(default,
+    /// skip_serializing_if = "Vec::is_empty")]`; `optional` is
+    /// `Option<Vec<T>>`.
+    #[arg(
+        long = "array-optionality",
+        value_parser = ["bare", "optional"]
+    )]
+    array_optionality: Option<String>,
+
+    /// Control how `bool` properties with a schema `default` are rendered:
+    /// `bare` (default) is `bool` with `#[serde(default)]`; `option` is
+    /// `Option<bool>`.
+    #[arg(
+        long = "default-bool-optionality",
+        value_parser = ["bare", "option"]
+    )]
+    default_bool_optionality: Option<String>,
+
+    /// Control how non-required, non-bool properties carrying a schema
+    /// `default` are rendered: `bare` (default) keeps the field bare with
+    /// `#[serde(default = "defaults::...")]`; `option` wraps the field in
+    /// `Option<T>` and drops the schema default.
+    #[arg(
+        long = "defaulted-field-optionality",
+        value_parser = ["bare", "option"]
+    )]
+    defaulted_field_optionality: Option<String>,
+
+    /// Drop the per-field `#[serde(default, skip_serializing_if =
+    /// "::std::option::Option::is_none")]` pair on `Option<T>` fields.
+    /// Pair with a struct-level `#[serde_with::skip_serializing_none]`
+    /// (e.g. via `--additional-attr`) so the omission semantics are
+    /// preserved.
+    #[arg(long = "elide-option-field-defaults", default_value = "false")]
+    elide_option_field_defaults: bool,
+
+    /// Emit `#[patch(name = "Option<{Inner}Patch>")]` above every
+    /// `Option<{InnerStruct}>` field so that `struct_patch::Patch`
+    /// produces a deep partial-merge type rather than a shallow
+    /// `Option<Option<T>>`. Pair with a `struct_patch::Patch` derive.
+    #[arg(long = "deep-patches", default_value = "false")]
+    deep_patches: bool,
+
+    /// Control how schema `allOf` compositions are rendered: `merge`
+    /// (default) produces one flat struct containing the union of all
+    /// properties; `compose` emits `#[serde(flatten)]` fields for `$ref`
+    /// subschemas with inline subschemas folded in as ordinary fields.
+    #[arg(
+        long = "allof-strategy",
+        value_parser = ["merge", "compose"]
+    )]
+    allof_strategy: Option<String>,
+
+    /// Embed the full pretty-printed JSON Schema in each generated type's
+    /// doc comment under a `# JSON schema` heading. Off by default so
+    /// IDE hover popovers show only the schema's description.
+    #[arg(long = "include-schema-in-docs", default_value = "false")]
+    include_schema_in_docs: bool,
+
+    /// Add a `#[cfg_attr(feature = "<feature>", derive(<derive>))]` to every
+    /// generated struct, enum, and newtype. Pass as `feature=DerivePath`
+    /// (e.g. `--conditional-derive schemars=schemars::JsonSchema`).
+    #[arg(
+        long = "conditional-derive",
+        value_name = "FEATURE=DERIVE",
+        value_parser = parse_conditional
+    )]
+    conditional_derives: Vec<ConditionalSpec>,
+
+    /// Add a `#[cfg_attr(feature = "<feature>", <attr>)]` to every generated
+    /// struct, enum, and newtype. Pass as `feature=attr` (e.g.
+    /// `--conditional-attr strict="serde(deny_unknown_fields)"`).
+    #[arg(
+        long = "conditional-attr",
+        value_name = "FEATURE=ATTR",
+        value_parser = parse_conditional
+    )]
+    conditional_attrs: Vec<ConditionalSpec>,
+}
+
+#[derive(Debug, Clone)]
+struct ConditionalSpec {
+    cfg: String,
+    body: String,
+}
+
+fn parse_conditional(s: &str) -> std::result::Result<ConditionalSpec, String> {
+    let (cfg, body) = s
+        .split_once('=')
+        .ok_or_else(|| "expected `feature=value`".to_string())?;
+    if cfg.is_empty() || body.is_empty() {
+        return Err("expected `feature=value` with non-empty parts".to_string());
+    }
+    Ok(ConditionalSpec {
+        cfg: cfg.to_string(),
+        body: body.to_string(),
+    })
 }
 
 impl CliArgs {
@@ -178,6 +308,69 @@ pub fn convert(args: &CliArgs) -> Result<String> {
         settings.with_unknown_crates(unknown_crates);
     }
 
+    if let Some(date_type) = &args.date_type {
+        settings.with_date_type(date_type);
+    }
+    if let Some(date_time_type) = &args.date_time_type {
+        settings.with_date_time_type(date_time_type);
+    }
+    if let Some(uuid_type) = &args.uuid_type {
+        settings.with_uuid_type(uuid_type);
+    }
+    if args.unconstrained_string {
+        settings.with_unconstrained_string(true);
+    }
+    if args.unconstrained_int {
+        settings.with_unconstrained_int(true);
+    }
+    if let Some(mode) = &args.array_optionality {
+        let mode = match mode.as_str() {
+            "bare" => ArrayOptionality::Bare,
+            "optional" => ArrayOptionality::OptionalIfNotRequired,
+            _ => unreachable!(),
+        };
+        settings.with_array_optionality(mode);
+    }
+    if let Some(mode) = &args.default_bool_optionality {
+        let mode = match mode.as_str() {
+            "bare" => DefaultBoolOptionality::Bare,
+            "option" => DefaultBoolOptionality::AlwaysOption,
+            _ => unreachable!(),
+        };
+        settings.with_default_bool_optionality(mode);
+    }
+    if let Some(mode) = &args.defaulted_field_optionality {
+        let mode = match mode.as_str() {
+            "bare" => DefaultedFieldOptionality::Bare,
+            "option" => DefaultedFieldOptionality::AlwaysOption,
+            _ => unreachable!(),
+        };
+        settings.with_defaulted_field_optionality(mode);
+    }
+    if args.elide_option_field_defaults {
+        settings.with_elide_option_field_defaults(true);
+    }
+    if args.deep_patches {
+        settings.with_deep_patches(DeepPatchPolicy::AllOptionStructs);
+    }
+    if let Some(strategy) = &args.allof_strategy {
+        let strategy = match strategy.as_str() {
+            "merge" => AllOfStrategy::Merge,
+            "compose" => AllOfStrategy::Compose,
+            _ => unreachable!(),
+        };
+        settings.with_allof_strategy(strategy);
+    }
+    if args.include_schema_in_docs {
+        settings.with_schema_in_docs(true);
+    }
+    for conditional in &args.conditional_derives {
+        settings.with_conditional_derive(&conditional.cfg, &conditional.body);
+    }
+    for conditional in &args.conditional_attrs {
+        settings.with_conditional_attr(&conditional.cfg, &conditional.body);
+    }
+
     let mut type_space = TypeSpace::new(&settings);
     type_space
         .add_root_schema(schema)
@@ -200,71 +393,70 @@ pub fn convert(args: &CliArgs) -> Result<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_output_parsing_stdout() {
-        let args = CliArgs {
-            input: PathBuf::from("input.json"),
+    fn args_with(
+        input: &str,
+        output: Option<PathBuf>,
+        no_builder: bool,
+        map_type: Option<String>,
+    ) -> CliArgs {
+        CliArgs {
+            input: PathBuf::from(input),
             builder: false,
             additional_derives: vec![],
             additional_attrs: vec![],
-            output: Some(PathBuf::from("-")),
-            no_builder: false,
+            output,
+            no_builder,
             crates: vec![],
-            map_type: None,
+            map_type,
             unknown_crates: Default::default(),
-        };
+            date_type: None,
+            date_time_type: None,
+            uuid_type: None,
+            unconstrained_string: false,
+            unconstrained_int: false,
+            array_optionality: None,
+            default_bool_optionality: None,
+            defaulted_field_optionality: None,
+            elide_option_field_defaults: false,
+            deep_patches: false,
+            allof_strategy: None,
+            include_schema_in_docs: false,
+            conditional_derives: vec![],
+            conditional_attrs: vec![],
+        }
+    }
 
+    #[test]
+    fn test_output_parsing_stdout() {
+        let args = args_with("input.json", Some(PathBuf::from("-")), false, None);
         assert_eq!(args.output_path(), None);
     }
 
     #[test]
     fn test_output_parsing_file() {
-        let args = CliArgs {
-            input: PathBuf::from("input.json"),
-            builder: false,
-            additional_derives: vec![],
-            additional_attrs: vec![],
-            output: Some(PathBuf::from("some_file.rs")),
-            no_builder: false,
-            crates: vec![],
-            map_type: None,
-            unknown_crates: Default::default(),
-        };
-
+        let args = args_with(
+            "input.json",
+            Some(PathBuf::from("some_file.rs")),
+            false,
+            None,
+        );
         assert_eq!(args.output_path(), Some(PathBuf::from("some_file.rs")));
     }
 
     #[test]
     fn test_output_parsing_default() {
-        let args = CliArgs {
-            input: PathBuf::from("input.json"),
-            builder: false,
-            additional_derives: vec![],
-            additional_attrs: vec![],
-            output: None,
-            no_builder: false,
-            crates: vec![],
-            map_type: None,
-            unknown_crates: Default::default(),
-        };
-
+        let args = args_with("input.json", None, false, None);
         assert_eq!(args.output_path(), Some(PathBuf::from("input.rs")));
     }
 
     #[test]
     fn test_use_btree_map() {
-        let args = CliArgs {
-            input: PathBuf::from("input.json"),
-            builder: false,
-            additional_derives: vec![],
-            additional_attrs: vec![],
-            output: None,
-            no_builder: false,
-            crates: vec![],
-            map_type: Some("::std::collections::BTreeMap".to_string()),
-            unknown_crates: Default::default(),
-        };
-
+        let args = args_with(
+            "input.json",
+            None,
+            false,
+            Some("::std::collections::BTreeMap".to_string()),
+        );
         assert_eq!(
             args.map_type,
             Some("::std::collections::BTreeMap".to_string())
@@ -273,52 +465,34 @@ mod tests {
 
     #[test]
     fn test_builder_as_default_style() {
-        let args = CliArgs {
-            input: PathBuf::from("input.json"),
-            builder: false,
-            additional_derives: vec![],
-            additional_attrs: vec![],
-            output: None,
-            no_builder: false,
-            crates: vec![],
-            map_type: None,
-            unknown_crates: Default::default(),
-        };
-
+        let args = args_with("input.json", None, false, None);
         assert!(args.use_builder());
     }
 
     #[test]
     fn test_no_builder() {
-        let args = CliArgs {
-            input: PathBuf::from("input.json"),
-            builder: false,
-            additional_derives: vec![],
-            additional_attrs: vec![],
-            output: None,
-            no_builder: true,
-            crates: vec![],
-            map_type: None,
-            unknown_crates: Default::default(),
-        };
-
+        let args = args_with("input.json", None, true, None);
         assert!(!args.use_builder());
     }
 
     #[test]
     fn test_builder_opt_in() {
-        let args = CliArgs {
-            input: PathBuf::from("input.json"),
-            builder: true,
-            additional_derives: vec![],
-            additional_attrs: vec![],
-            output: None,
-            no_builder: false,
-            crates: vec![],
-            map_type: None,
-            unknown_crates: Default::default(),
-        };
-
+        let mut args = args_with("input.json", None, false, None);
+        args.builder = true;
         assert!(args.use_builder());
+    }
+
+    #[test]
+    fn test_parse_conditional_ok() {
+        let spec = parse_conditional("schemars=schemars::JsonSchema").unwrap();
+        assert_eq!(spec.cfg, "schemars");
+        assert_eq!(spec.body, "schemars::JsonSchema");
+    }
+
+    #[test]
+    fn test_parse_conditional_err() {
+        assert!(parse_conditional("nope").is_err());
+        assert!(parse_conditional("=value").is_err());
+        assert!(parse_conditional("feature=").is_err());
     }
 }

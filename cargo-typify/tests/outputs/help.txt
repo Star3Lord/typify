@@ -35,6 +35,56 @@ Options:
           
           [possible values: generate, allow, deny]
 
+      --date-type <PATH>
+          Override the Rust type used for `{"type":"string","format":"date"}` schemas. The default is `::chrono::naive::NaiveDate`. Setting this to e.g. `::std::string::String` removes the chrono dependency
+
+      --date-time-type <PATH>
+          Override the Rust type used for `{"type":"string","format":"date-time"}` schemas. The default is `::chrono::DateTime<::chrono::offset::Utc>`
+
+      --uuid-type <PATH>
+          Override the Rust type used for `{"type":"string","format":"uuid"}` schemas. The default is `::uuid::Uuid`
+
+      --unconstrained-string
+          Emit plain `String` instead of a per-field `#[serde(transparent)]` newtype for strings carrying `pattern` / `minLength` / `maxLength` constraints. Validation must then be enforced elsewhere
+
+      --unconstrained-int
+          Emit plain integer types (e.g. `i32`) instead of the corresponding `NonZeroU*` for integer schemas with `minimum: 1`
+
+      --array-optionality <ARRAY_OPTIONALITY>
+          Control how non-required array properties are rendered: `bare` (default) is `Vec<T>` with `#[serde(default, skip_serializing_if = "Vec::is_empty")]`; `optional` is `Option<Vec<T>>`
+          
+          [possible values: bare, optional]
+
+      --default-bool-optionality <DEFAULT_BOOL_OPTIONALITY>
+          Control how `bool` properties with a schema `default` are rendered: `bare` (default) is `bool` with `#[serde(default)]`; `option` is `Option<bool>`
+          
+          [possible values: bare, option]
+
+      --defaulted-field-optionality <DEFAULTED_FIELD_OPTIONALITY>
+          Control how non-required, non-bool properties carrying a schema `default` are rendered: `bare` (default) keeps the field bare with `#[serde(default = "defaults::...")]`; `option` wraps the field in `Option<T>` and drops the schema default
+          
+          [possible values: bare, option]
+
+      --elide-option-field-defaults
+          Drop the per-field `#[serde(default, skip_serializing_if = "::std::option::Option::is_none")]` pair on `Option<T>` fields. Pair with a struct-level `#[serde_with::skip_serializing_none]` (e.g. via `--additional-attr`) so the omission semantics are preserved
+
+      --deep-patches
+          Emit `#[patch(name = "Option<{Inner}Patch>")]` above every `Option<{InnerStruct}>` field so that `struct_patch::Patch` produces a deep partial-merge type rather than a shallow `Option<Option<T>>`. Pair with a `struct_patch::Patch` derive
+
+      --allof-strategy <ALLOF_STRATEGY>
+          Control how schema `allOf` compositions are rendered: `merge` (default) produces one flat struct containing the union of all properties; `compose` emits `#[serde(flatten)]` fields for `$ref` subschemas with inline subschemas folded in as ordinary fields
+          
+          [possible values: merge, compose]
+
+      --include-schema-in-docs
+          Embed the full pretty-printed JSON Schema in each generated type's doc comment under a `# JSON schema` heading. Off by default so IDE hover popovers show only the schema's description
+
+      --conditional-derive <FEATURE=DERIVE>
+          Add a `#[cfg_attr(feature = "<feature>", derive(<derive>))]` to every generated struct, enum, and newtype. Pass as `feature=DerivePath` (e.g. `--conditional-derive schemars=schemars::JsonSchema`)
+
+      --conditional-attr <FEATURE=ATTR>
+          Add a `#[cfg_attr(feature = "<feature>", <attr>)]` to every generated struct, enum, and newtype. Pass as `feature=attr` (e.g. `--conditional-attr strict="serde(deny_unknown_fields)"`)
+
   -h, --help
           Print help (see a summary with '-h')
 

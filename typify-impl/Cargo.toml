@@ -28,5 +28,11 @@ paste = { workspace = true }
 rustfmt-wrapper = { workspace = true }
 schema = { workspace = true }
 schemars = { workspace = true, features = ["uuid1", "impl_json_schema"] }
+# `derive` is enabled here (vs. the bare `serde` in `[dependencies]`) so
+# the rename-elision tests in `tests/test_rename_elision.rs` can build
+# small serde Serialize / Deserialize roundtrip fixtures and prove that
+# typify's elision agrees with serde at runtime, not just at
+# codegen-text level.
+serde = { workspace = true, features = ["derive"] }
 syn = { workspace = true, features = ["full", "extra-traits", "visit-mut"] }
 uuid = { workspace = true }

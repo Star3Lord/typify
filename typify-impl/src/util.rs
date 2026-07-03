@@ -836,6 +836,36 @@ pub(crate) fn recase(input: &str, case: Case) -> (String, Option<String>) {
     (new, rename)
 }
 
+/// Returns `true` when a struct-level `#[serde(rename_all = "<case>")]`
+/// makes a per-field `#[serde(rename = "<wire_name>")]` redundant — i.e.
+/// when applying `<case>` to the snake-cased Rust field name reproduces
+/// `<wire_name>` verbatim. In that situation the per-field rename can be
+/// dropped because the struct-level `rename_all` already produces the
+/// same wire name.
+///
+/// Recognized cases follow serde's convention:
+/// `lowercase`, `UPPERCASE`, `PascalCase`, `camelCase`, `snake_case`,
+/// `SCREAMING_SNAKE_CASE`, `kebab-case`, `SCREAMING-KEBAB-CASE`. Anything
+/// else returns `false`, so the per-field rename is preserved.
+pub(crate) fn rename_all_covers_rename(rust_field: &str, wire_name: &str, case: &str) -> bool {
+    use heck::{
+        ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase,
+        ToSnakeCase,
+    };
+    let transformed = match case {
+        "lowercase" => rust_field.to_lowercase().replace('_', ""),
+        "UPPERCASE" => rust_field.to_uppercase().replace('_', ""),
+        "PascalCase" => rust_field.to_pascal_case(),
+        "camelCase" => rust_field.to_lower_camel_case(),
+        "snake_case" => rust_field.to_snake_case(),
+        "SCREAMING_SNAKE_CASE" => rust_field.to_shouty_snake_case(),
+        "kebab-case" => rust_field.to_kebab_case(),
+        "SCREAMING-KEBAB-CASE" => rust_field.to_shouty_kebab_case(),
+        _ => return false,
+    };
+    transformed == wire_name
+}
+
 pub(crate) fn unique<I, T>(items: I) -> bool
 where
     I: IntoIterator<Item = T>,

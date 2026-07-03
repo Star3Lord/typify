@@ -11,8 +11,9 @@ use crate::{
         StructProperty, StructPropertyRename, StructPropertyState, TypeEntry, TypeEntryStruct,
         WrappedValue,
     },
-    util::{get_type_name, metadata_description, recase, Case},
-    Name, Result, TypeEntryDetails, TypeId, TypeSpace,
+    util::{get_type_name, metadata_description, recase, rename_all_covers_rename, Case},
+    ArrayOptionality, DefaultBoolOptionality, DefaultedFieldOptionality, Name, Result,
+    SerdeFieldCase, TypeEntryDetails, TypeId, TypeSpace,
 };
 
 impl TypeSpace {
@@ -105,6 +106,8 @@ impl TypeSpace {
                 let map_type_id = self.assign_type(map_type);
                 let extra_prop = StructProperty {
                     name: "extra".to_string(),
+                    wire_name: "extra".to_string(),
+                    api_name: "extra".to_string(),
                     rename: StructPropertyRename::Flatten,
                     state: StructPropertyState::Required,
                     description: None,
@@ -168,13 +171,32 @@ impl TypeSpace {
         };
 
         let (name, rename) = recase(prop_name, Case::Snake);
+        let wire_name = prop_name.to_string();
+        let api_name = prop_name.to_snake_case();
+        // If the caller configured a struct-level `#[serde(rename_all =
+        // "<case>")]` AND the wire name happens to be exactly the
+        // `<case>` transform of our snake-cased field name, the per-field
+        // rename is redundant — the struct-level `rename_all` already
+        // covers it. Drop it so the generated code stays legible.
         let rename = match rename {
-            Some(old_name) => StructPropertyRename::Rename(old_name),
+            Some(old_name) => {
+                if let Some(case) = self.settings.struct_rename_all() {
+                    if rename_all_covers_rename(&name, &old_name, case) {
+                        StructPropertyRename::None
+                    } else {
+                        StructPropertyRename::Rename(old_name)
+                    }
+                } else {
+                    StructPropertyRename::Rename(old_name)
+                }
+            }
             None => StructPropertyRename::None,
         };
 
         Ok(StructProperty {
             name,
+            wire_name,
+            api_name,
             rename,
             state,
             description: metadata_description(metadata),
@@ -293,6 +315,8 @@ impl TypeSpace {
 
                 Ok(StructProperty {
                     name,
+                    wire_name: format!("subtype_{}", idx),
+                    api_name: format!("subtype_{}", idx),
                     rename: StructPropertyRename::Flatten,
                     state: if optional {
                         StructPropertyState::Optional
@@ -336,6 +360,8 @@ pub(crate) enum DefaultFunction {
 pub(crate) fn generate_serde_attr(
     type_name: &str,
     prop_name: &str,
+    wire_name: &str,
+    api_name: &str,
     naming: &StructPropertyRename,
     state: &StructPropertyState,
     prop_type: &TypeEntry,
@@ -343,16 +369,50 @@ pub(crate) fn generate_serde_attr(
     output: &mut OutputSpace,
 ) -> (TokenStream, DefaultFunction) {
     let mut serde_options = Vec::new();
-    match naming {
-        StructPropertyRename::Rename(s) => serde_options.push(quote! { rename = #s }),
-        StructPropertyRename::Flatten => serde_options.push(quote! { flatten }),
-        StructPropertyRename::None => (),
+    match (type_space.settings.serde_field_case(), naming) {
+        (_, StructPropertyRename::Flatten) => serde_options.push(quote! { flatten }),
+        (Some(SerdeFieldCase::Wire), _) => {
+            if wire_name != prop_name {
+                serde_options.push(quote! { rename = #wire_name });
+            }
+            if api_name != wire_name {
+                serde_options.push(quote! { alias = #api_name });
+            }
+        }
+        (Some(SerdeFieldCase::Snake), _) => {
+            if api_name != prop_name {
+                serde_options.push(quote! { rename = #api_name });
+            }
+            if wire_name != api_name {
+                serde_options.push(quote! { alias = #wire_name });
+            }
+        }
+        (None, StructPropertyRename::Rename(s)) => serde_options.push(quote! { rename = #s }),
+        (None, StructPropertyRename::None) => (),
     }
 
     let default_fn = match (state, &prop_type.details) {
         (StructPropertyState::Optional, TypeEntryDetails::Option(_)) => {
-            serde_options.push(quote! { default });
-            serde_options.push(quote! { skip_serializing_if = "::std::option::Option::is_none" });
+            // When `with_elide_option_field_defaults(true)` is set, suppress
+            // the canonical `default + skip_serializing_if =
+            // "Option::is_none"` pair on `Option<T>` fields. The
+            // struct-level `#[serde_with::skip_serializing_none]` (assumed
+            // present in callers that turn this knob on) covers the
+            // serialize-omission, and `Option<T>` already deserializes a
+            // missing JSON key as `None` without `serde(default)`.
+            //
+            // Any other serde attribute that landed in `serde_options`
+            // earlier (currently `rename = "..."` or `flatten`) is left
+            // untouched — those are independent of the default/skip pair.
+            // The downstream `DefaultFunction::Default` value is still
+            // returned so the Rust-level `Default::default()` path
+            // (used by struct builders / `PropDefault::Default`) keeps
+            // working.
+            if !type_space.settings.elide_option_field_defaults() {
+                serde_options.push(quote! { default });
+                serde_options
+                    .push(quote! { skip_serializing_if = "::std::option::Option::is_none" });
+            }
             DefaultFunction::Default
         }
         (StructPropertyState::Optional, TypeEntryDetails::Vec(_)) => {
@@ -420,11 +480,52 @@ pub(crate) fn generate_serde_attr(
 /// See if this type is a type that we can omit with a serde directive; note
 /// that the type id lookup will fail only for references (and only during
 /// initial reference processing).
+///
+/// `Optional` means the property has an intrinsic default and will be
+/// represented as the type itself (e.g. `Vec<T>`) with a `#[serde(default,
+/// skip_serializing_if = ...)]` attribute. `Required` means we'll wrap the
+/// type in `Option<T>` and treat the absence of a value as `None`.
 fn has_default(
     type_space: &mut TypeSpace,
     type_id: &TypeId,
     default: Option<&serde_json::Value>,
 ) -> StructPropertyState {
+    // Honor the optionality knobs that override typify's built-in "this type
+    // has an intrinsic default" behavior.
+    let array_optionality = type_space.settings.array_optionality;
+    let default_bool_optionality = type_space.settings.default_bool_optionality;
+    let defaulted_field_optionality = type_space.settings.defaulted_field_optionality();
+
+    // When `DefaultedFieldOptionality::AlwaysOption` is set, drop the
+    // schema-level `default:` for non-bool, non-intrinsically-defaultable
+    // types so the catch-all `(_, None)` arm below returns `Required`,
+    // which the caller wraps in `Option<T>` and marks `Optional`. Bool
+    // fields stay governed by the dedicated `default_bool_optionality`
+    // knob; intrinsic-default types (`Option`, `Vec`, `Map`, `Unit`)
+    // already serialize cleanly without lifting, so we leave their
+    // existing arms untouched. The dead `defaults::<owner>_<field>`
+    // helper is suppressed implicitly: without the
+    // `StructPropertyState::Default(...)` outcome, `generate_serde_attr`
+    // never adds the helper to `OutputSpace`.
+    let default = if matches!(
+        defaulted_field_optionality,
+        DefaultedFieldOptionality::AlwaysOption,
+    ) && default.is_some()
+    {
+        match type_space.id_to_entry.get(type_id).map(|e| &e.details) {
+            Some(
+                TypeEntryDetails::Boolean
+                | TypeEntryDetails::Option(_)
+                | TypeEntryDetails::Vec(_)
+                | TypeEntryDetails::Map(..)
+                | TypeEntryDetails::Unit,
+            ) => default,
+            _ => None,
+        }
+    } else {
+        default
+    };
+
     // This lookup can fail in the scenario where a struct (or struct
     // variant) member is optional and the type of that optional member is a
     // reference to a type that has not yet been converted. This is fine: those
@@ -438,6 +539,14 @@ fn has_default(
     ) {
         // No default specified.
         (Some(TypeEntryDetails::Option(_)), None) => StructPropertyState::Optional,
+        // When the caller has opted in to the `Option<Vec<T>>` wire shape,
+        // `Vec<T>` is no longer treated as a type with an intrinsic default;
+        // we return `Required` so the caller wraps it in `Option<Vec<T>>`.
+        (Some(TypeEntryDetails::Vec(_)), None)
+            if matches!(array_optionality, ArrayOptionality::OptionalIfNotRequired) =>
+        {
+            StructPropertyState::Required
+        }
         (Some(TypeEntryDetails::Vec(_)), None) => StructPropertyState::Optional,
         (Some(TypeEntryDetails::Map(..)), None) => StructPropertyState::Optional,
         (Some(TypeEntryDetails::Unit), None) => StructPropertyState::Optional,
@@ -448,12 +557,33 @@ fn has_default(
             StructPropertyState::Optional
         }
         // Default specified is the same as the implicit default: []
+        // When the caller has opted in to `Option<Vec<T>>`, we also treat
+        // an explicit `default: []` as "wrap in Option" — the schema's intent
+        // is "absent or empty"; both serialize equivalently with
+        // `skip_serializing_if = "Option::is_none"` on the resulting wrapper.
+        (Some(TypeEntryDetails::Vec(_)), Some(serde_json::Value::Array(a)))
+            if a.is_empty()
+                && matches!(array_optionality, ArrayOptionality::OptionalIfNotRequired) =>
+        {
+            StructPropertyState::Required
+        }
+        // Default specified is the same as the implicit default: []
         (Some(TypeEntryDetails::Vec(_)), Some(serde_json::Value::Array(a))) if a.is_empty() => {
             StructPropertyState::Optional
         }
         // Default specified is the same as the implicit default: {}
         (Some(TypeEntryDetails::Map(..)), Some(serde_json::Value::Object(m))) if m.is_empty() => {
             StructPropertyState::Optional
+        }
+        // Default specified is the same as the implicit default: false
+        // When the caller has opted in to `Option<bool>` semantics, we
+        // refuse this collapse so the property gets wrapped in `Option<bool>`
+        // and the wire form preserves the "absent vs. explicitly false"
+        // distinction.
+        (Some(TypeEntryDetails::Boolean), Some(serde_json::Value::Bool(false)))
+            if matches!(default_bool_optionality, DefaultBoolOptionality::AlwaysOption) =>
+        {
+            StructPropertyState::Required
         }
         // Default specified is the same as the implicit default: false
         (Some(TypeEntryDetails::Boolean), Some(serde_json::Value::Bool(false))) => {
@@ -478,6 +608,15 @@ fn has_default(
 
         // This is a reference that will resolve to this type id later.
         (None, Some(default)) => StructPropertyState::Default(WrappedValue(default.clone())),
+        // For boolean fields with a schema `default: true`, the caller's
+        // `AlwaysOption` selection means "drop the default and wrap in
+        // Option". Without `AlwaysOption` we fall through to the default
+        // branch below.
+        (Some(TypeEntryDetails::Boolean), Some(serde_json::Value::Bool(true)))
+            if matches!(default_bool_optionality, DefaultBoolOptionality::AlwaysOption) =>
+        {
+            StructPropertyState::Required
+        }
         // All other types as well as types with intrinsic defaults that have
         // been explicitly overridden.
         (Some(_), Some(default)) => StructPropertyState::Default(WrappedValue(default.clone())),

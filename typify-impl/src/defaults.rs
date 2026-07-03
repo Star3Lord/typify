@@ -588,9 +588,11 @@ fn all_props<'a>(
     property: &'a StructProperty,
     type_space: &'a TypeSpace,
 ) -> Vec<(Option<&'a String>, &'a TypeId, bool)> {
+    // The wire name is authoritative regardless of whether a per-field
+    // rename is emitted: a `StructPropertyRename::None` may still cover a
+    // renamed field when a struct-level `rename_all` elided it.
     let maybe_name = match &property.rename {
-        StructPropertyRename::None => Some(&property.name),
-        StructPropertyRename::Rename(rename) => Some(rename),
+        StructPropertyRename::None | StructPropertyRename::Rename(_) => Some(&property.wire_name),
         StructPropertyRename::Flatten => None,
     };
 

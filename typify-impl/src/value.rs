@@ -387,8 +387,7 @@ fn value_for_struct_props(
 
     let direct_props = properties.iter().filter_map(|prop| {
         let name = match &prop.rename {
-            StructPropertyRename::None => &prop.name,
-            StructPropertyRename::Rename(rename) => rename,
+            StructPropertyRename::None | StructPropertyRename::Rename(_) => &prop.wire_name,
             StructPropertyRename::Flatten => return None,
         };
 
@@ -408,8 +407,7 @@ fn value_for_struct_props(
         .iter()
         .filter_map(|prop| {
             let name = match &prop.rename {
-                StructPropertyRename::None => &prop.name,
-                StructPropertyRename::Rename(rename) => rename,
+                StructPropertyRename::None | StructPropertyRename::Rename(_) => &prop.wire_name,
                 StructPropertyRename::Flatten => return None,
             };
 

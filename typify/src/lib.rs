@@ -149,13 +149,22 @@
 #![deny(missing_docs)]
 
 pub use typify_impl::accept_as_ident;
+pub use typify_impl::AllOfStrategy;
+pub use typify_impl::ArrayOptionality;
+pub use typify_impl::AttrPosition;
 pub use typify_impl::CrateVers;
+pub use typify_impl::DeepPatchFilter;
+pub use typify_impl::DeepPatchPolicy;
+pub use typify_impl::DefaultBoolOptionality;
+pub use typify_impl::DefaultedFieldOptionality;
 pub use typify_impl::Error;
+pub use typify_impl::SerdeFieldCase;
 pub use typify_impl::Type;
 pub use typify_impl::TypeDetails;
 pub use typify_impl::TypeEnum;
 pub use typify_impl::TypeEnumVariant;
 pub use typify_impl::TypeId;
+pub use typify_impl::TypeKindFilter;
 pub use typify_impl::TypeNewtype;
 pub use typify_impl::TypeSpace;
 pub use typify_impl::TypeSpaceImpl;

@@ -13,7 +13,9 @@ use serde_tokenstream::{ParseWrapper, TokenStreamWrapper};
 use syn::LitStr;
 use token_utils::TypeAndImpls;
 use typify_impl::{
-    CrateVers, MapType, TypeSpace, TypeSpacePatch, TypeSpaceSettings, UnknownPolicy,
+    AllOfStrategy, ArrayOptionality, CrateVers, DeepPatchPolicy, DefaultBoolOptionality,
+    DefaultedFieldOptionality, MapType, TypeKindFilter, TypeSpace, TypeSpacePatch,
+    TypeSpaceSettings, UnknownPolicy,
 };
 
 mod token_utils;
@@ -98,6 +100,102 @@ struct MacroSettings {
     #[serde(default)]
     convert:
         serde_tokenstream::OrderedMap<schemars::schema::SchemaObject, ParseWrapper<TypeAndImpls>>,
+
+    /// Override the Rust type used for `format: date` strings. See
+    /// [`typify_impl::TypeSpaceSettings::with_date_type`].
+    #[serde(default)]
+    date_type: Option<ParseWrapper<syn::Path>>,
+    /// Override the Rust type used for `format: date-time` strings. See
+    /// [`typify_impl::TypeSpaceSettings::with_date_time_type`].
+    #[serde(default)]
+    date_time_type: Option<ParseWrapper<syn::Type>>,
+    /// Override the Rust type used for `format: uuid` strings. See
+    /// [`typify_impl::TypeSpaceSettings::with_uuid_type`].
+    #[serde(default)]
+    uuid_type: Option<ParseWrapper<syn::Path>>,
+    /// Emit plain `String` for constrained strings. See
+    /// [`typify_impl::TypeSpaceSettings::with_unconstrained_string`].
+    #[serde(default)]
+    unconstrained_string: bool,
+    /// Emit plain integers instead of `NonZero*` types. See
+    /// [`typify_impl::TypeSpaceSettings::with_unconstrained_int`].
+    #[serde(default)]
+    unconstrained_int: bool,
+    /// Wrap non-required arrays in `Option<Vec<T>>`. See
+    /// [`typify_impl::TypeSpaceSettings::with_array_optionality`].
+    #[serde(default)]
+    array_optionality: ArrayOptionality,
+    /// Wrap defaulted bools in `Option<bool>`. See
+    /// [`typify_impl::TypeSpaceSettings::with_default_bool_optionality`].
+    #[serde(default)]
+    default_bool_optionality: DefaultBoolOptionality,
+    /// Controls whether non-required, non-bool struct fields with a
+    /// schema-level `default:` are emitted as bare `T` (the typify
+    /// historical shape) or wrapped in `Option<T>`. See
+    /// [`typify_impl::TypeSpaceSettings::with_defaulted_field_optionality`].
+    #[serde(default)]
+    defaulted_field_optionality: DefaultedFieldOptionality,
+    /// Drop the per-field `#[serde(default, skip_serializing_if = ...)]`
+    /// pair on `Option<T>` fields. Pair with a struct-level
+    /// `#[serde_with::skip_serializing_none]` (typically added via `attrs`
+    /// or `conditional_attrs`) so the omission semantics are preserved. See
+    /// [`typify_impl::TypeSpaceSettings::with_elide_option_field_defaults`].
+    #[serde(default)]
+    elide_option_field_defaults: bool,
+    /// Bulk policy for `#[patch(name = "Option<{Inner}Patch>")]` emission
+    /// on `Option<{InnerStruct}>` fields. See
+    /// [`typify_impl::TypeSpaceSettings::with_deep_patches`]. The
+    /// closure-based predicate (`with_deep_patch_filter`) is library-only
+    /// and intentionally not exposed via this macro.
+    #[serde(default)]
+    deep_patches: DeepPatchPolicy,
+    /// Render `allOf` compositions with `#[serde(flatten)]` fields. See
+    /// [`typify_impl::TypeSpaceSettings::with_allof_strategy`].
+    #[serde(default)]
+    allof_strategy: AllOfStrategy,
+    /// Embed the full pretty-printed JSON Schema in each generated type's
+    /// doc comment under a `# JSON schema` heading. Defaults to `false` so
+    /// IDE hovers stay readable. See
+    /// [`typify_impl::TypeSpaceSettings::with_schema_in_docs`].
+    #[serde(default)]
+    include_schema_in_docs: bool,
+    /// Cfg-gated derives applied per type kind. See
+    /// [`typify_impl::TypeSpaceSettings::with_conditional_derive_for`].
+    #[serde(default)]
+    conditional_derives: Vec<MacroConditional>,
+    /// Cfg-gated attributes applied per type kind. See
+    /// [`typify_impl::TypeSpaceSettings::with_conditional_attr_for`].
+    #[serde(default)]
+    conditional_attrs: Vec<MacroConditional>,
+}
+
+#[derive(Deserialize)]
+struct MacroConditional {
+    feature: String,
+    body: TokenStreamWrapper,
+    /// Optional scope. One of `"structs"`, `"enums"`, `"newtypes"`, or
+    /// `"all"` (default). Controls which generated type categories the
+    /// conditional derive / attribute is applied to.
+    #[serde(default)]
+    kinds: Option<String>,
+}
+
+impl MacroConditional {
+    fn kinds_filter(&self) -> TypeKindFilter {
+        match self.kinds.as_deref() {
+            None | Some("all") => TypeKindFilter::ALL,
+            Some("structs") => TypeKindFilter::STRUCTS,
+            Some("enums") => TypeKindFilter::ENUMS,
+            Some("newtypes") => TypeKindFilter::NEWTYPES,
+            Some(other) => {
+                panic!(
+                    "unknown kinds filter `{}`: expected one of `all`, \
+                     `structs`, `enums`, `newtypes`",
+                    other
+                )
+            }
+        }
+    }
 }
 
 struct MacroCrateSpec {
@@ -205,6 +303,20 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
             crates,
             map_type,
             attrs,
+            date_type,
+            date_time_type,
+            uuid_type,
+            unconstrained_string,
+            unconstrained_int,
+            array_optionality,
+            default_bool_optionality,
+            defaulted_field_optionality,
+            elide_option_field_defaults,
+            deep_patches,
+            allof_strategy,
+            include_schema_in_docs,
+            conditional_derives,
+            conditional_attrs,
         } = serde_tokenstream::from_tokenstream(&item.into())?;
         let mut settings = TypeSpaceSettings::default();
         derives.into_iter().for_each(|derive| {
@@ -240,6 +352,41 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
 
         if let Some(map_type) = map_type {
             settings.with_map_type(MapType(map_type.into_inner()));
+        }
+
+        if let Some(date_type) = date_type {
+            settings.with_date_type(date_type.to_token_stream().to_string());
+        }
+        if let Some(date_time_type) = date_time_type {
+            settings.with_date_time_type(date_time_type.to_token_stream().to_string());
+        }
+        if let Some(uuid_type) = uuid_type {
+            settings.with_uuid_type(uuid_type.to_token_stream().to_string());
+        }
+        settings.with_unconstrained_string(unconstrained_string);
+        settings.with_unconstrained_int(unconstrained_int);
+        settings.with_array_optionality(array_optionality);
+        settings.with_default_bool_optionality(default_bool_optionality);
+        settings.with_defaulted_field_optionality(defaulted_field_optionality);
+        settings.with_elide_option_field_defaults(elide_option_field_defaults);
+        settings.with_deep_patches(deep_patches);
+        settings.with_allof_strategy(allof_strategy);
+        settings.with_schema_in_docs(include_schema_in_docs);
+        for conditional in conditional_derives {
+            let kinds = conditional.kinds_filter();
+            settings.with_conditional_derive_for(
+                &conditional.feature,
+                conditional.body.to_token_stream().to_string(),
+                kinds,
+            );
+        }
+        for conditional in conditional_attrs {
+            let kinds = conditional.kinds_filter();
+            settings.with_conditional_attr_for(
+                &conditional.feature,
+                conditional.body.to_token_stream().to_string(),
+                kinds,
+            );
         }
 
         (schema.into_inner(), settings)

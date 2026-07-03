@@ -14,7 +14,7 @@ use crate::{
     sanitize,
     structs::{generate_serde_attr, DefaultFunction},
     util::{get_type_name, metadata_description, unique, TypePatch},
-    Case, DefaultImpl, Name, Result, TypeId, TypeSpace, TypeSpaceImpl,
+    Case, DeepPatchPolicy, DefaultImpl, Name, Result, TypeId, TypeSpace, TypeSpaceImpl,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,6 +202,11 @@ pub(crate) enum VariantDetails {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct StructProperty {
     pub name: String,
+    /// The property name exactly as it appears in the schema.
+    pub wire_name: String,
+    /// The snake_case form of the property name, used as the "API" name
+    /// when a [`crate::SerdeFieldCase`] is configured.
+    pub api_name: String,
     pub rename: StructPropertyRename,
     pub state: StructPropertyState,
     pub description: Option<String>,
@@ -782,7 +787,7 @@ impl TypeEntry {
             schema: SchemaWrapper(schema),
         } = enum_details;
 
-        let doc = make_doc(name, description.as_ref(), schema);
+        let doc = make_doc(type_space, name, description.as_ref(), schema);
 
         // TODO this is a one-off for some useful traits; this should move into
         // the creation of the enum type.
@@ -901,16 +906,39 @@ impl TypeEntry {
                 }
             });
 
-        let default_impl = default.as_ref().map(|value| {
-            let default_stream = self.output_value(type_space, &value.0, &quote! {}).unwrap();
-            quote! {
-                impl ::std::default::Default for #type_name {
-                    fn default() -> Self {
-                        #default_stream
+        // Honor the schema-level default when present, otherwise fall back
+        // to the auto-emit-first-Simple-variant setting so required-enum
+        // struct fields can satisfy `#[derive(Default)]` on the
+        // containing struct.
+        let default_impl = match default.as_ref() {
+            Some(value) => {
+                let default_stream = self.output_value(type_space, &value.0, &quote! {}).unwrap();
+                Some(quote! {
+                    impl ::std::default::Default for #type_name {
+                        fn default() -> Self {
+                            #default_stream
+                        }
                     }
-                }
+                })
             }
-        });
+            None if type_space.settings.enum_first_variant_default() => variants
+                .iter()
+                .find_map(|variant| match variant.details {
+                    VariantDetails::Simple => variant.ident_name.as_deref(),
+                    _ => None,
+                })
+                .map(|ident_name| {
+                    let variant_name = format_ident!("{}", ident_name);
+                    quote! {
+                        impl ::std::default::Default for #type_name {
+                            fn default() -> Self {
+                                Self::#variant_name
+                            }
+                        }
+                    }
+                }),
+            None => None,
+        };
 
         let untagged_newtype_from_string_impl = bespoke_impls
             .contains(&TypeEntryEnumImpl::UntaggedFromStr)
@@ -1080,19 +1108,33 @@ impl TypeEntry {
             }
         };
 
-        let derives = strings_to_derives(
+        let derives = compute_derive_list(
+            type_space,
+            crate::TypeKind::Enum,
             derive_set,
             &self.extra_derives,
             &type_space.settings.extra_derives,
         );
 
         let attrs = strings_to_attrs(&self.extra_attrs, &type_space.settings.extra_attrs);
+        let extra_attr_lists = type_attr_lists(type_space, crate::TypeKind::Enum);
+
+        let uncond_attrs_pre = &extra_attr_lists.uncond_pre;
+        let uncond_attrs_post = &extra_attr_lists.uncond_post;
+        let cond_attrs_pre = &extra_attr_lists.cond_pre;
+        let cond_attrs_post = &extra_attr_lists.cond_post;
+        let cond_derives = &extra_attr_lists.cond_derives;
 
         let item = quote! {
             #doc
             #(#attrs)*
+            #(#uncond_attrs_pre)*
+            #(#cond_attrs_pre)*
+            #(#cond_derives)*
             #[derive(#(#derives),*)]
             #serde
+            #(#uncond_attrs_post)*
+            #(#cond_attrs_post)*
             pub enum #type_name {
                 #(#variants_decl)*
             }
@@ -1128,12 +1170,20 @@ impl TypeEntry {
             deny_unknown_fields,
             schema: SchemaWrapper(schema),
         } = struct_details;
-        let doc = make_doc(name, description.as_ref(), schema);
+        let doc = make_doc(type_space, name, description.as_ref(), schema);
 
-        // Generate the serde directives as needed.
+        // Generate the serde directives as needed. The struct-level
+        // `rename_all` is emitted when the caller has configured one via
+        // `with_struct_rename_all` — see the docs on that method for the
+        // per-field elision rule this enables.
         let mut serde_options = Vec::new();
         if let Some(old_name) = rename {
             serde_options.push(quote! { rename = #old_name });
+        }
+        if type_space.settings.serde_field_case().is_none() {
+            if let Some(case) = type_space.settings.struct_rename_all() {
+                serde_options.push(quote! { rename_all = #case });
+            }
         }
         if *deny_unknown_fields {
             serde_options.push(quote! { deny_unknown_fields });
@@ -1146,6 +1196,7 @@ impl TypeEntry {
         // Gather the various components for all properties.
         let mut prop_doc = Vec::new();
         let mut prop_serde = Vec::new();
+        let mut prop_patch = Vec::new();
         let mut prop_default = Vec::new();
         let mut prop_name = Vec::new();
         let mut prop_error = Vec::new();
@@ -1168,6 +1219,8 @@ impl TypeEntry {
             let (serde, default_fn) = generate_serde_attr(
                 name,
                 &prop.name,
+                &prop.wire_name,
+                &prop.api_name,
                 &prop.rename,
                 &prop.state,
                 prop_type_entry,
@@ -1176,6 +1229,7 @@ impl TypeEntry {
             );
 
             prop_serde.push(serde);
+            prop_patch.push(deep_patch_attr(type_space, name, prop));
             prop_default.push(match default_fn {
                 DefaultFunction::Default => PropDefault::Default(quote! {
                     Default::default()
@@ -1193,13 +1247,22 @@ impl TypeEntry {
             });
         });
 
-        let derives = strings_to_derives(
+        let derives = compute_derive_list(
+            type_space,
+            crate::TypeKind::Struct,
             derive_set,
             &self.extra_derives,
             &type_space.settings.extra_derives,
         );
 
         let attrs = strings_to_attrs(&self.extra_attrs, &type_space.settings.extra_attrs);
+        let extra_attr_lists = type_attr_lists(type_space, crate::TypeKind::Struct);
+
+        let uncond_attrs_pre = &extra_attr_lists.uncond_pre;
+        let uncond_attrs_post = &extra_attr_lists.uncond_post;
+        let cond_attrs_pre = &extra_attr_lists.cond_pre;
+        let cond_attrs_post = &extra_attr_lists.cond_post;
+        let cond_derives = &extra_attr_lists.cond_derives;
 
         output.add_item(
             OutputSpaceMod::Crate,
@@ -1207,58 +1270,80 @@ impl TypeEntry {
             quote! {
                 #doc
                 #(#attrs)*
+                #(#uncond_attrs_pre)*
+                #(#cond_attrs_pre)*
+                #(#cond_derives)*
                 #[derive(#(#derives),*)]
                 #serde
+                #(#uncond_attrs_post)*
+                #(#cond_attrs_post)*
                 pub struct #type_name {
                     #(
                         #prop_doc
                         #prop_serde
+                        #prop_patch
                         pub #prop_name: #prop_type,
                     )*
                 }
             },
         );
 
-        // If there's a default value, generate an impl Default
-        if let Some(value) = default {
-            let default_stream = self.output_value(type_space, &value.0, &quote! {}).unwrap();
-            output.add_item(
-                OutputSpaceMod::Crate,
-                name,
-                quote! {
-                    impl ::std::default::Default for #type_name {
-                        fn default() -> Self {
-                            #default_stream
-                        }
-                    }
-                },
-            );
-        } else if let Some(prop_default) = prop_default
+        // If `Default` is in the unconditional derive list for structs,
+        // skip the hand-written `impl Default` block — the derive
+        // already produces one, and two would clash. The schema-provided
+        // default value is still honored at deserialization time via the
+        // per-field `#[serde(default = "...")]` attributes that
+        // `generate_serde_attr` emits; what changes is that calling
+        // `Foo::default()` in Rust returns the all-fields-default value
+        // rather than reconstructing the schema-provided one.
+        let unconditional_default_for_structs = type_space
+            .settings
+            .unconditional_derives
             .iter()
-            .map(|pd| match pd {
-                PropDefault::None(_) => None,
-                PropDefault::Default(token_stream) | PropDefault::Custom(token_stream) => {
-                    Some(token_stream)
-                }
-            })
-            .collect::<Option<Vec<_>>>()
-        {
-            // If all properties have a default, we can generate a Default impl
-            output.add_item(
-                OutputSpaceMod::Crate,
-                name,
-                quote! {
-                    impl ::std::default::Default for #type_name {
-                        fn default() -> Self {
-                            Self {
-                                #(
-                                    #prop_name: #prop_default,
-                                )*
+            .any(|u| u.derive == "Default" && u.kinds.matches(crate::TypeKind::Struct));
+
+        if !unconditional_default_for_structs {
+            // If there's a default value, generate an impl Default
+            if let Some(value) = default {
+                let default_stream = self.output_value(type_space, &value.0, &quote! {}).unwrap();
+                output.add_item(
+                    OutputSpaceMod::Crate,
+                    name,
+                    quote! {
+                        impl ::std::default::Default for #type_name {
+                            fn default() -> Self {
+                                #default_stream
                             }
                         }
+                    },
+                );
+            } else if let Some(prop_default) = prop_default
+                .iter()
+                .map(|pd| match pd {
+                    PropDefault::None(_) => None,
+                    PropDefault::Default(token_stream) | PropDefault::Custom(token_stream) => {
+                        Some(token_stream)
                     }
-                },
-            )
+                })
+                .collect::<Option<Vec<_>>>()
+            {
+                // If all properties have a default, we can generate a Default impl
+                output.add_item(
+                    OutputSpaceMod::Crate,
+                    name,
+                    quote! {
+                        impl ::std::default::Default for #type_name {
+                            fn default() -> Self {
+                                Self {
+                                    #(
+                                        #prop_name: #prop_default,
+                                    )*
+                                }
+                            }
+                        }
+                    },
+                )
+            }
         }
 
         if type_space.settings.struct_builder {
@@ -1371,7 +1456,7 @@ impl TypeEntry {
             constraints,
             schema: SchemaWrapper(schema),
         } = newtype_details;
-        let doc = make_doc(name, description.as_ref(), schema);
+        let doc = make_doc(type_space, name, description.as_ref(), schema);
 
         let type_name = format_ident!("{}", name);
         let inner_type = type_space.id_to_entry.get(type_id).unwrap();
@@ -1386,6 +1471,13 @@ impl TypeEntry {
         }
 
         derive_set.extend(type_space.settings.extra_derives.iter().map(|s| s.as_str()));
+
+        // Derives that must not appear in the emitted `#[derive(...)]`
+        // because a bespoke impl below replaces them. Unlike the
+        // `derive_set.remove(...)` calls (which only affect the legacy
+        // derive-set path), entries here are also filtered out of
+        // caller-supplied unconditional derives — see `compute_derive_list`.
+        let mut denied_derives: Vec<&str> = Vec::new();
 
         let constraint_impl = match constraints {
             // In the unconstrained case we proxy impls through the inner type.
@@ -1442,8 +1534,11 @@ impl TypeEntry {
                         }
                     });
 
-                let display_impl = inner_type
-                    .has_impl(type_space, TypeSpaceImpl::Display)
+                // String newtypes get their `Display` from the
+                // `str_convenience_impl` block below; everything else
+                // proxies through the inner type.
+                let display_impl = (inner_type.has_impl(type_space, TypeSpaceImpl::Display)
+                    && !is_str)
                     .then(|| {
                         quote! {
                             impl ::std::fmt::Display for #type_name {
@@ -1480,6 +1575,7 @@ impl TypeEntry {
                 // We're going to impl Deserialize so we can remove it
                 // from the set of derived impls.
                 derive_set.remove("::serde::Deserialize");
+                denied_derives.extend(["::serde::Deserialize", "Deserialize"]);
 
                 let value_output = enum_values
                     .iter()
@@ -1630,6 +1726,7 @@ impl TypeEntry {
                 // We're going to impl Deserialize so we can remove it
                 // from the set of derived impls.
                 derive_set.remove("::serde::Deserialize");
+                denied_derives.extend(["::serde::Deserialize", "Deserialize"]);
 
                 // TODO: if a user were to derive schemars::JsonSchema, it
                 // wouldn't be accurate.
@@ -1710,18 +1807,69 @@ impl TypeEntry {
             }
         });
 
+        // Convenience impls for string newtypes: expose the inner value as
+        // `&str`, print it directly, and (when unconstrained) allow cheap
+        // construction from a `&str`. Constrained newtypes only get the
+        // read-side impls — construction must go through the validating
+        // `FromStr` / `TryFrom` path.
+        let str_convenience_impl = is_str.then(|| {
+            let from_str_ref = matches!(constraints, TypeEntryNewtypeConstraints::None).then(|| {
+                quote! {
+                    impl ::std::convert::From<&str> for #type_name {
+                        fn from(value: &str) -> Self {
+                            Self(value.to_string())
+                        }
+                    }
+                }
+            });
+            quote! {
+                impl ::std::convert::AsRef<str> for #type_name {
+                    fn as_ref(&self) -> &str {
+                        self.0.as_ref()
+                    }
+                }
+
+                impl ::std::fmt::Display for #type_name {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                        self.0.fmt(f)
+                    }
+                }
+
+                #from_str_ref
+            }
+        });
+
         // This isn't the cleanest. Unlike other types, we roll in the
         // extra_derives here so that we can sniff out and override uses of
         // "schemars::JsonSchema".
-        let derives = strings_to_derives(derive_set, &self.extra_derives, &[]);
+        let derives = compute_derive_list_denying(
+            type_space,
+            crate::TypeKind::Newtype,
+            derive_set,
+            &self.extra_derives,
+            &[],
+            &denied_derives,
+        );
 
         let attrs = strings_to_attrs(&self.extra_attrs, &type_space.settings.extra_attrs);
+        let extra_attr_lists = type_attr_lists(type_space, crate::TypeKind::Newtype);
+
+        let uncond_attrs_pre = &extra_attr_lists.uncond_pre;
+        let uncond_attrs_post = &extra_attr_lists.uncond_post;
+        let cond_attrs_pre = &extra_attr_lists.cond_pre;
+        let cond_attrs_post = &extra_attr_lists.cond_post;
+        let cond_derives = &extra_attr_lists.cond_derives;
 
         let item = quote! {
             #doc
             #(#attrs)*
+            #(#uncond_attrs_pre)*
+            #(#cond_attrs_pre)*
+            #(#cond_derives)*
             #[derive(#(#derives),*)]
             #[serde(transparent)]
+            #(#uncond_attrs_post)*
+            #(#cond_attrs_post)*
             pub struct #type_name(#vis #inner_type_name);
 
             impl ::std::ops::Deref for #type_name {
@@ -1738,6 +1886,7 @@ impl TypeEntry {
             }
 
             #default_impl
+            #str_convenience_impl
             #constraint_impl
         };
         output.add_item(OutputSpaceMod::Crate, name, item);
@@ -2037,40 +2186,297 @@ impl TypeEntry {
     }
 }
 
-fn make_doc(name: &str, description: Option<&String>, schema: &Schema) -> TokenStream {
+/// Decide whether to emit a `#[patch(name = "Option<{Inner}Patch>")]`
+/// line above a struct field. Returns `Some(token_stream)` when the
+/// configured deep-patch policy (the `with_deep_patch_filter` closure
+/// if set, otherwise the [`DeepPatchPolicy`] bulk setting) accepts the
+/// field, and the field's Rust type is exactly `Option<{InnerStruct}>`
+/// (potentially with an interior `Box`). Returns `None` for every other
+/// shape — including:
+///
+/// - `#[serde(flatten)]` base fields (composed via
+///   `AllOfStrategy::Compose`), which are bare `T` rather than `Option<T>`
+///   and would not type-check with a `#[patch(name = ...)]` rewrite anyway.
+/// - `Vec<T>` and `Vec<Option<T>>`. `struct_patch` doesn't deep-merge
+///   through vectors, so the rewrite would silently break compilation.
+/// - `Option<T>` where `T` is a primitive, native, enum, or newtype.
+///   Only generated `struct`s derive `Patch`, so there's no `{Inner}Patch`
+///   target.
+///
+/// The closure form is consulted first; the bulk policy is only used
+/// when no closure is registered.
+fn deep_patch_attr(
+    type_space: &TypeSpace,
+    owner_name: &str,
+    prop: &StructProperty,
+) -> Option<TokenStream> {
+    // `#[serde(flatten)]` fields are bare, not Option<T>, so skip.
+    if matches!(prop.rename, StructPropertyRename::Flatten) {
+        return None;
+    }
+
+    // The settings must have something to say about deep patches at all.
+    let filter = type_space.settings.deep_patch_filter();
+    let bulk = type_space.settings.deep_patches();
+    if filter.is_none() && matches!(bulk, DeepPatchPolicy::Off) {
+        return None;
+    }
+
+    // Drill: Option<{maybe Box}<{InnerStruct}>>.
+    let outer = type_space.id_to_entry.get(&prop.type_id)?;
+    let inner_id = match &outer.details {
+        TypeEntryDetails::Option(id) => id,
+        _ => return None,
+    };
+    let mut inner = type_space.id_to_entry.get(inner_id)?;
+    if let TypeEntryDetails::Box(id) = &inner.details {
+        inner = type_space.id_to_entry.get(id)?;
+    }
+    let inner_struct_name = match &inner.details {
+        TypeEntryDetails::Struct(s) => s.name.as_str(),
+        _ => return None,
+    };
+
+    // Ask the predicate first; fall back to the bulk policy.
+    let allow = if let Some(filter) = filter {
+        filter.accepts(owner_name, &prop.name, inner_struct_name)
+    } else {
+        matches!(bulk, DeepPatchPolicy::AllOptionStructs)
+    };
+    if !allow {
+        return None;
+    }
+
+    let patch_name = format!("Option<{}Patch>", inner_struct_name);
+    Some(quote! { #[patch(name = #patch_name)] })
+}
+
+/// Build the doc comment that decorates each generated type.
+///
+/// Always emits the human-readable description (or, if absent, the type's
+/// own name in backticks). When
+/// [`crate::TypeSpaceSettings::with_schema_in_docs`] is enabled on the
+/// owning [`TypeSpace`], also appends a `# JSON schema` markdown heading
+/// followed by a fenced `json` code block containing the full
+/// pretty-printed schema.
+///
+/// # Why a heading + fenced code block (and not `<details>`)
+///
+/// The historical shape — `<details><summary>JSON schema</summary>`
+/// followed by a fenced code block, then `</details>` — renders fine under
+/// `cargo doc` but breaks in rust-analyzer hover popovers for two reasons:
+///
+/// 1. CommonMark closes the raw-HTML block at the blank line after
+///    `</summary>`, leaving the fenced code block sandwiched between two
+///    unrelated raw-HTML siblings; the hover renderer skips syntax
+///    highlighting on it.
+/// 2. The wrapper lines were emitted via `///` (which `quote!` lowers to
+///    `#[doc = " ..."]`, with one leading space), while the schema lines
+///    were emitted via `#[doc = #schema_lines]` (with zero leading space).
+///    The asymmetric indentation prevents the fenced-code-block
+///    indent-stripping rule from firing and makes long string values
+///    word-wrap inside the popover.
+///
+/// Emitting a `# JSON schema` heading + fenced code block — with every
+/// wrapper line as an explicit `#[doc = "..."]` (zero leading space) —
+/// sidesteps both issues.
+fn make_doc(
+    type_space: &TypeSpace,
+    name: &str,
+    description: Option<&String>,
+    schema: &Schema,
+) -> TokenStream {
     let desc = match description {
         Some(desc) => desc,
         None => &format!("`{}`", name),
     };
+
+    if !type_space.include_schema_in_docs() {
+        return quote! {
+            #[doc = #desc]
+        };
+    }
+
     let schema_json = serde_json::to_string_pretty(schema).unwrap();
     let schema_lines = schema_json.lines();
+
+    // Every wrapper line is emitted via `#[doc = "..."]` (zero leading
+    // space) so it lines up with the schema lines, which are also emitted
+    // that way. This avoids the indent-asymmetry issue described in the
+    // doc comment above.
     quote! {
         #[doc = #desc]
-        ///
-        /// <details><summary>JSON schema</summary>
-        ///
-        /// ```json
+        #[doc = ""]
+        #[doc = "# JSON schema"]
+        #[doc = ""]
+        #[doc = "```json"]
         #(
             #[doc = #schema_lines]
         )*
-        /// ```
-        /// </details>
+        #[doc = "```"]
     }
 }
 
-fn strings_to_derives<'a>(
-    derive_set: BTreeSet<&'a str>,
-    type_derives: &'a BTreeSet<String>,
-    extra_derives: &'a [String],
-) -> impl Iterator<Item = TokenStream> + 'a {
-    let mut combined_derives = derive_set.clone();
-    combined_derives.extend(extra_derives.iter().map(String::as_str));
-    combined_derives.extend(type_derives.iter().map(String::as_str));
-    combined_derives.into_iter().map(|derive| {
-        syn::parse_str::<syn::Path>(derive)
-            .unwrap()
-            .into_token_stream()
-    })
+/// Build the ordered list of derive paths emitted in `#[derive(...)]` for a
+/// type of the given `kind`.
+///
+/// When at least one [`crate::TypeSpaceSettings::with_unconditional_derive`]
+/// has been registered for `kind`, the list is taken verbatim from those
+/// entries (insertion order). This lets callers control the exact ordering
+/// of the derive list and is the only mechanism for emitting a non-sorted
+/// derive list.
+///
+/// Otherwise the historical behavior applies: the lexicographically sorted
+/// base set is merged with `with_derive` extras and per-type derive
+/// patches.
+fn compute_derive_list(
+    type_space: &TypeSpace,
+    kind: crate::TypeKind,
+    base_derive_set: BTreeSet<&str>,
+    type_derives: &BTreeSet<String>,
+    extra_derives: &[String],
+) -> Vec<TokenStream> {
+    compute_derive_list_denying(
+        type_space,
+        kind,
+        base_derive_set,
+        type_derives,
+        extra_derives,
+        &[],
+    )
+}
+
+/// [`compute_derive_list`] with an additional deny-list of derives that a
+/// bespoke impl replaces (e.g. `Deserialize` on constrained newtypes).
+/// Denied entries are excluded from every source, including
+/// caller-supplied unconditional derives, so the generated code never
+/// contains both a derive and a conflicting manual impl.
+fn compute_derive_list_denying(
+    type_space: &TypeSpace,
+    kind: crate::TypeKind,
+    base_derive_set: BTreeSet<&str>,
+    type_derives: &BTreeSet<String>,
+    extra_derives: &[String],
+    denied_derives: &[&str],
+) -> Vec<TokenStream> {
+    let unconditional: Vec<&str> = type_space
+        .settings
+        .unconditional_derives
+        .iter()
+        .filter(|u| u.kinds.matches(kind))
+        .map(|u| u.derive.as_str())
+        .collect();
+
+    let derive_strs: Vec<&str> = if unconditional.is_empty() {
+        // Legacy path: BTreeSet-sorted union of base set, type-specific
+        // derives, and `with_derive` extras.
+        let mut combined: BTreeSet<&str> = base_derive_set;
+        combined.extend(extra_derives.iter().map(String::as_str));
+        combined.extend(type_derives.iter().map(String::as_str));
+        combined.into_iter().collect()
+    } else {
+        // Caller-driven path: respect insertion order verbatim and then
+        // append any type-local patches / `with_derive` extras (these are
+        // sorted to keep additions deterministic).
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut out: Vec<&str> = Vec::with_capacity(unconditional.len());
+        for derive in &unconditional {
+            if seen.insert(derive) {
+                out.push(derive);
+            }
+        }
+        let mut extras: BTreeSet<&str> = BTreeSet::new();
+        extras.extend(extra_derives.iter().map(String::as_str));
+        extras.extend(type_derives.iter().map(String::as_str));
+        for derive in extras {
+            if seen.insert(derive) {
+                out.push(derive);
+            }
+        }
+        out
+    };
+
+    derive_strs
+        .into_iter()
+        .filter(|derive| !denied_derives.contains(derive))
+        .map(|derive| {
+            syn::parse_str::<syn::Path>(derive)
+                .unwrap_or_else(|e| panic!("invalid derive path {:?}: {}", derive, e))
+                .into_token_stream()
+        })
+        .collect()
+}
+
+/// The conditional / unconditional attribute and derive lines emitted
+/// around a generated type's main `#[derive(...)]`, grouped by position.
+/// Built once per type by [`type_attr_lists`].
+#[derive(Default)]
+struct TypeAttrLists {
+    /// Unconditional attributes placed before the derive.
+    uncond_pre: Vec<TokenStream>,
+    /// Unconditional attributes placed after the derive (and after any
+    /// type-level `#[serde(...)]` line).
+    uncond_post: Vec<TokenStream>,
+    /// `#[cfg_attr(feature = ..., <attr>)]` lines placed before the derive.
+    cond_pre: Vec<TokenStream>,
+    /// `#[cfg_attr(feature = ..., <attr>)]` lines placed after the derive.
+    cond_post: Vec<TokenStream>,
+    /// `#[cfg_attr(feature = ..., derive(...))]` lines; always emitted
+    /// before the main derive (a cfg-gated derive after the main derive
+    /// would be a duplicate, not a transformation).
+    cond_derives: Vec<TokenStream>,
+}
+
+/// Collect every conditional / unconditional attribute and derive
+/// configured on the [`TypeSpace`] that applies to the given type `kind`,
+/// preserving insertion order within each list.
+fn type_attr_lists(type_space: &TypeSpace, kind: crate::TypeKind) -> TypeAttrLists {
+    let mut lists = TypeAttrLists::default();
+
+    for entry in &type_space.settings.unconditional_attrs {
+        if !entry.kinds.matches(kind) {
+            continue;
+        }
+        let attr: TokenStream = entry
+            .attr
+            .parse()
+            .expect("unconditional attribute must parse as a token stream");
+        let line = quote! { #[ #attr ] };
+        match entry.position {
+            crate::AttrPosition::BeforeDerive => lists.uncond_pre.push(line),
+            crate::AttrPosition::AfterDerive => lists.uncond_post.push(line),
+        }
+    }
+
+    for entry in &type_space.settings.conditional_attrs {
+        if !entry.kinds.matches(kind) {
+            continue;
+        }
+        let cfg = entry.cfg.as_str();
+        let attr: TokenStream = entry
+            .attr
+            .parse()
+            .expect("conditional attribute must parse as a token stream");
+        let line = quote! { #[cfg_attr(feature = #cfg, #attr)] };
+        match entry.position {
+            crate::AttrPosition::BeforeDerive => lists.cond_pre.push(line),
+            crate::AttrPosition::AfterDerive => lists.cond_post.push(line),
+        }
+    }
+
+    for entry in &type_space.settings.conditional_derives {
+        if !entry.kinds.matches(kind) {
+            continue;
+        }
+        let cfg = entry.cfg.as_str();
+        let derive = syn::parse_str::<syn::Path>(&entry.derive)
+            .expect("conditional derive must be a valid Rust path");
+        lists
+            .cond_derives
+            .push(quote! { #[cfg_attr(feature = #cfg, derive(#derive))] });
+    }
+
+    lists
 }
 
 fn strings_to_attrs<'a>(
