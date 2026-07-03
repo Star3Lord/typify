@@ -1713,8 +1713,14 @@ impl TypeSpace {
         let mut per_module: BTreeMap<String, OutputSpace> = BTreeMap::new();
 
         // Ensure the default module exists even if the partition map
-        // happens to cover every generated type.
+        // happens to cover every generated type, and materialize every
+        // module the caller references in `imports_per_module` — another
+        // module's preamble may glob-import it (e.g. `use super::foo::*;`)
+        // even when no generated type landed there.
         per_module.entry(default_module.to_string()).or_default();
+        for name in imports_per_module.keys() {
+            per_module.entry(name.clone()).or_default();
+        }
 
         for type_entry in self.id_to_entry.values() {
             // Only Struct/Enum/Newtype produce a top-level `pub` item;
