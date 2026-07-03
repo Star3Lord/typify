@@ -804,6 +804,22 @@ pub(crate) fn sanitize(input: &str, case: Case) -> String {
     }
 }
 
+/// The Rust type name a schema definition key produces (Pascal-case
+/// sanitization), e.g. `useCSL` → `UseCsl`. Lets callers key per-type
+/// configuration by original schema name without re-implementing
+/// typify's sanitization rules. This is the same function applied to
+/// `definitions` / `components.schemas` keys during generation.
+pub fn rust_type_ident(name: &str) -> String {
+    sanitize(name, Case::Pascal)
+}
+
+/// The Rust field name a schema property key produces (snake-case
+/// sanitization), e.g. `bookingId` → `booking_id`. The field-name
+/// counterpart of [`rust_type_ident`].
+pub fn rust_field_ident(name: &str) -> String {
+    sanitize(name, Case::Snake)
+}
+
 /// Return true if the string is a valid Rust identifier.
 ///
 /// If this function returns false, typify adds a trailing underscore to it. For

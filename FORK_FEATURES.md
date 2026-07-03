@@ -349,14 +349,22 @@ client layout.
 
 ## Schema-name → Rust-name mapping
 
-**API:** `TypeSpace::definition_rust_names()`
-**Implementation:** `typify-impl/src/lib.rs`
+**API:** `TypeSpace::definition_rust_names()`, `rust_type_ident`,
+`rust_field_ident`
+**Implementation:** `typify-impl/src/lib.rs`, `typify-impl/src/util.rs`
 
-Returns `(schema_key, rust_type_name)` pairs for every named definition
-(`definitions` / `components.schemas` entry). Lets callers build the
-partition map for `to_stream_partitioned` from reachability analysis keyed by
-original schema names, without re-implementing typify's Pascal-case
-sanitization.
+`definition_rust_names()` returns `(schema_key, rust_type_name)` pairs for
+every named definition (`definitions` / `components.schemas` entry). Lets
+callers build the partition map for `to_stream_partitioned` from
+reachability analysis keyed by original schema names, without
+re-implementing typify's Pascal-case sanitization.
+
+The free functions `rust_type_ident` / `rust_field_ident` expose the same
+sanitization *before* generation runs (Pascal for definition keys, snake
+for property keys) — for callers that need to translate schema-name-keyed
+configuration (e.g. per-type overrides) into the Rust names that
+generation-time hooks like [`with_deep_patch_filter`](#deep-patches-for-struct_patch)
+observe.
 
 ## String newtype conveniences
 
@@ -376,7 +384,7 @@ The fork-specific behavior is pinned by four test suites in
 
 - `test_wire_shape.rs` — the wire-shape knobs (type overrides, unconstrained
   string/int, optionality knobs, `allOf` compose, conditional derives/attrs,
-  deep patches, elision).
+  deep patches, elision, string-newtype conveniences).
 - `test_rename_elision.rs` — the `rename_all` elision matrix across all
   serde case conventions plus serde runtime round-trips proving elision
   agrees with serde.
