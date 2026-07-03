@@ -1691,26 +1691,40 @@ impl TypeSpace {
     /// — one per distinct destination module — produced in stable order
     /// (lexicographically by module name).
     ///
+    /// Module names may be slash-separated paths (e.g.
+    /// `"cancel_booking/request"` or `"shared/enums"`), which are emitted
+    /// as nested blocks: `pub mod cancel_booking { pub mod request { ... } }`.
+    /// Sibling paths merge into one parent (`"shared/request"` and
+    /// `"shared/enums"` produce a single `pub mod shared` containing
+    /// both), deterministically ordered segment-by-segment. Intermediate
+    /// path components that never appear as a partition target themselves
+    /// are pure containers: they hold only their child modules plus any
+    /// preamble the caller attached to that exact path key.
+    ///
     /// `imports_per_module` lets the caller inject a preamble of `use`
-    /// statements at the top of each module body. Use this for
-    /// cross-module references (e.g. `use super::shared::*;` so types in
-    /// per-operation modules can name shared types directly) and for
-    /// bringing trait paths into scope so bare derives resolve (e.g.
+    /// statements at the top of each module body, keyed by the same
+    /// (possibly slash-separated) path names. Use this for cross-module
+    /// references (e.g. `use super::shared::*;` so types in per-operation
+    /// modules can name shared types directly) and for bringing trait
+    /// paths into scope so bare derives resolve (e.g.
     /// `use serde::{Serialize, Deserialize};`).
     ///
     /// The `error` module (containing `ConversionError`) is emitted as
-    /// a submodule inside every partition so that any per-module
+    /// a submodule inside every leaf partition so that any per-module
     /// `self::error::ConversionError` reference in a bespoke enum impl
     /// resolves correctly. The shared `defaults` module is likewise
-    /// duplicated into every partition.
+    /// duplicated into every leaf partition. (A partition that holds
+    /// generated types always receives both, even in the unusual case
+    /// where other partitions nest inside it.)
     pub fn to_stream_partitioned(
         &self,
         partition: &std::collections::HashMap<String, String>,
         default_module: &str,
         imports_per_module: &std::collections::HashMap<String, TokenStream>,
     ) -> TokenStream {
-        // Bucket each emitted type into a per-module `OutputSpace`.
+        // Bucket each emitted type into a per-module-path `OutputSpace`.
         let mut per_module: BTreeMap<String, OutputSpace> = BTreeMap::new();
+        let mut has_types: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Ensure the default module exists even if the partition map
         // happens to cover every generated type, and materialize every
@@ -1739,41 +1753,44 @@ impl TypeSpace {
                 .map(String::as_str)
                 .unwrap_or(default_module)
                 .to_string();
+            has_types.insert(module.clone());
             let space = per_module.entry(module).or_default();
             type_entry.output(self, space);
         }
 
-        // Every module gets its own `error` submodule so that
+        // Arrange the flat path-keyed buckets into a module tree so that
+        // slash-separated paths nest and siblings merge under a common
+        // parent. Flat names are the single-segment special case and
+        // emit exactly as they always have.
+        let mut root = ModuleNode::default();
+        for (path, space) in per_module {
+            root.insert(&path, space);
+        }
+
+        // Every leaf module gets its own `error` submodule so that
         // `self::error::ConversionError` references in bespoke enum impls
         // resolve to the right path no matter which module the enum
         // ended up in.
         //
         // The shared default-fn helpers (e.g. `default_u64`) are likewise
-        // baked into every partition's `defaults` submodule alongside any
-        // type-local default fns emitted during `type_entry.output()`.
+        // baked into every leaf partition's `defaults` submodule alongside
+        // any type-local default fns emitted during `type_entry.output()`.
         // Duplicating the helpers is preferable to cross-module imports,
         // which would collide with the local `pub mod defaults` blocks;
         // the helpers are tiny so the duplication is negligible.
-        for space in per_module.values_mut() {
-            self.fill_error_mod(space);
-            self.fill_defaults_mod(space);
-        }
-
-        let mods = per_module.into_iter().map(|(name, output_space)| {
-            let mod_ident = format_ident!("{}", name);
-            let mod_body = output_space.into_stream();
-            let preamble = imports_per_module.get(&name).cloned().unwrap_or_default();
-            quote! {
-                pub mod #mod_ident {
-                    #preamble
-                    #mod_body
-                }
+        //
+        // Intermediate (parent) modules that exist only to contain nested
+        // partitions are left as pure containers — unless generated types
+        // were explicitly partitioned into them, in which case they need
+        // `error` / `defaults` just like a leaf.
+        root.for_each_space(&mut |path, space, is_leaf| {
+            if is_leaf || has_types.contains(path) {
+                self.fill_error_mod(space);
+                self.fill_defaults_mod(space);
             }
         });
 
-        quote! {
-            #(#mods)*
-        }
+        root.into_stream(String::new(), imports_per_module)
     }
 
     /// Map from the original schema definition key (e.g. an OpenAPI
@@ -1935,6 +1952,90 @@ impl TypeSpace {
     /// Create a Box<T> from a pre-assigned TypeId and assign it an ID.
     fn id_to_box(&mut self, id: &TypeId) -> TypeId {
         self.assign_type(TypeEntryDetails::Box(id.clone()).into())
+    }
+}
+
+/// A node in the module tree assembled by
+/// [`TypeSpace::to_stream_partitioned`] from (possibly slash-separated)
+/// partition paths. Children are kept in a [`BTreeMap`] so sibling and
+/// nested merging is deterministic.
+#[derive(Default)]
+struct ModuleNode {
+    children: BTreeMap<String, ModuleNode>,
+    /// The bucket of generated items destined for exactly this path, if
+    /// the path appeared as a partition target, the default module, or an
+    /// `imports_per_module` key. Pure intermediate containers have
+    /// `None`.
+    space: Option<OutputSpace>,
+}
+
+impl ModuleNode {
+    /// Insert the bucket for `path` (slash-separated) at the
+    /// corresponding position in the tree, creating intermediate
+    /// containers as needed.
+    fn insert(&mut self, path: &str, space: OutputSpace) {
+        let mut node = self;
+        for segment in path.split('/') {
+            node = node.children.entry(segment.to_string()).or_default();
+        }
+        node.space = Some(space);
+    }
+
+    /// Visit every bucketed node depth-first. The callback receives the
+    /// node's full slash-separated path, its output space, and whether
+    /// the node is a leaf (has no nested partitions).
+    fn for_each_space(&mut self, f: &mut impl FnMut(&str, &mut OutputSpace, bool)) {
+        self.walk_spaces(String::new(), f);
+    }
+
+    fn walk_spaces(&mut self, path: String, f: &mut impl FnMut(&str, &mut OutputSpace, bool)) {
+        let is_leaf = self.children.is_empty();
+        if let Some(space) = &mut self.space {
+            f(&path, space, is_leaf);
+        }
+        for (name, child) in &mut self.children {
+            let child_path = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}/{name}")
+            };
+            child.walk_spaces(child_path, f);
+        }
+    }
+
+    /// Render this node's body: the caller-supplied preamble for this
+    /// exact path, nested `pub mod` blocks for each child (in name
+    /// order), then the node's own generated items. The root node (empty
+    /// path) renders as the bare sequence of top-level modules.
+    fn into_stream(
+        self,
+        path: String,
+        imports_per_module: &std::collections::HashMap<String, TokenStream>,
+    ) -> TokenStream {
+        let preamble = imports_per_module.get(&path).cloned().unwrap_or_default();
+        let children = self.children.into_iter().map(|(name, child)| {
+            let child_path = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}/{name}")
+            };
+            let mod_ident = format_ident!("{}", name);
+            let mod_body = child.into_stream(child_path, imports_per_module);
+            quote! {
+                pub mod #mod_ident {
+                    #mod_body
+                }
+            }
+        });
+        let body = self
+            .space
+            .map(OutputSpace::into_stream)
+            .unwrap_or_default();
+        quote! {
+            #preamble
+            #(#children)*
+            #body
+        }
     }
 }
 

@@ -318,11 +318,36 @@ unmapped lands in `default_module`. `imports_per_module` injects a `use`
 preamble into each module (e.g. `use super::shared::*;` for cross-module
 references, or `use serde::{Serialize, Deserialize};` so bare derive paths
 resolve). The `error` module (`ConversionError`) and the shared `defaults`
-helpers are duplicated into every partition so intra-module paths
+helpers are duplicated into every leaf partition so intra-module paths
 (`self::error::...`, `defaults::...`) resolve without extra imports.
 
+Module names — partition values, `default_module`, and
+`imports_per_module` keys alike — may be slash-separated paths such as
+`cancel_booking/request` or `shared/enums`. Nested paths are emitted as
+properly nested blocks, with siblings merged under a common parent in
+deterministic (BTreeMap) order:
+
+```rust
+pub mod cancel_booking {
+    pub mod request { /* types + error/defaults */ }
+    pub mod response { /* ... */ }
+}
+pub mod shared {
+    pub mod enums { /* ... */ }
+}
+```
+
+Only leaf partitions (and any partition that types were explicitly
+assigned to) receive the duplicated `error`/`defaults` submodules;
+intermediate path components are pure containers holding their child
+modules plus any preamble attached to that exact path key (e.g. an
+`imports_per_module` entry for `"cancel_booking"` itself). Flat
+(single-segment) names behave exactly as before.
+
 Use this to split a large OpenAPI spec into one module per operation with a
-`shared` module for common types.
+`shared` module for common types, or — with nested paths — into
+per-operation `request`/`response` submodules mirroring a hand-written
+client layout.
 
 ## Schema-name → Rust-name mapping
 
@@ -346,7 +371,7 @@ Newtypes wrapping `String` always implement `AsRef<str>` and `Display`
 
 ## Tests
 
-The fork-specific behavior is pinned by three test suites in
+The fork-specific behavior is pinned by four test suites in
 `typify-impl/tests/`:
 
 - `test_wire_shape.rs` — the wire-shape knobs (type overrides, unconstrained
@@ -357,3 +382,6 @@ The fork-specific behavior is pinned by three test suites in
   agrees with serde.
 - `test_doc_format.rs` — the doc-comment format with and without
   `with_schema_in_docs`.
+- `test_partitioned_output.rs` — `to_stream_partitioned` module emission:
+  nested slash-separated paths, flat/nested mixes, preambles on leaf and
+  parent paths, and `error`/`defaults` duplication into leaves only.
