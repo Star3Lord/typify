@@ -113,6 +113,11 @@ struct MacroSettings {
     /// [`typify_impl::TypeSpaceSettings::with_uuid_type`].
     #[serde(default)]
     uuid_type: Option<ParseWrapper<syn::Path>>,
+    /// Map `"<instance-type>/<format>"` keys (e.g. `"string/decimal"`,
+    /// `"integer/int64"`) to Rust types. See
+    /// [`typify_impl::TypeSpaceSettings::with_format_type`].
+    #[serde(default)]
+    format_types: HashMap<String, ParseWrapper<syn::Type>>,
     /// Emit plain `String` for constrained strings. See
     /// [`typify_impl::TypeSpaceSettings::with_unconstrained_string`].
     #[serde(default)]
@@ -311,6 +316,7 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
             date_type,
             date_time_type,
             uuid_type,
+            format_types,
             unconstrained_string,
             unconstrained_int,
             array_optionality,
@@ -368,6 +374,22 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
         }
         if let Some(uuid_type) = uuid_type {
             settings.with_uuid_type(uuid_type.to_token_stream().to_string());
+        }
+        for (key, rust_type) in format_types {
+            let Some((instance_type, format)) = key.split_once('/') else {
+                return Err(syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    format!(
+                        "format_types key {key:?} must be \
+                         \"<instance-type>/<format>\", e.g. \"string/date-time\"",
+                    ),
+                ));
+            };
+            settings.with_format_type(
+                instance_type,
+                format,
+                rust_type.to_token_stream().to_string(),
+            );
         }
         settings.with_unconstrained_string(unconstrained_string);
         settings.with_unconstrained_int(unconstrained_int);

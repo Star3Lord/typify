@@ -821,8 +821,8 @@ impl TypeSpace {
     ) -> Result<(TypeEntry, &'a Option<Box<Metadata>>)> {
         match format.as_ref().map(String::as_str) {
             Some("uuid") => {
-                let type_name = match &self.settings.uuid_type {
-                    Some(type_name) => type_name.clone(),
+                let type_name = match self.settings.format_type("string", "uuid") {
+                    Some(type_name) => type_name,
                     None => {
                         self.uses_uuid = true;
                         "::uuid::Uuid".to_string()
@@ -838,8 +838,8 @@ impl TypeSpace {
             }
 
             Some("date") => {
-                let type_name = match &self.settings.date_type {
-                    Some(type_name) => type_name.clone(),
+                let type_name = match self.settings.format_type("string", "date") {
+                    Some(type_name) => type_name,
                     None => {
                         self.uses_chrono = true;
                         "::chrono::naive::NaiveDate".to_string()
@@ -854,8 +854,8 @@ impl TypeSpace {
                 ))
             }
             Some("date-time") => {
-                let type_name = match &self.settings.date_time_type {
-                    Some(type_name) => type_name.clone(),
+                let type_name = match self.settings.format_type("string", "date-time") {
+                    Some(type_name) => type_name,
                     None => {
                         self.uses_chrono = true;
                         "::chrono::DateTime<::chrono::offset::Utc>".to_string()
@@ -872,21 +872,27 @@ impl TypeSpace {
 
             Some("ip") => Ok((
                 TypeEntry::new_native(
-                    "::std::net::IpAddr",
+                    self.settings
+                        .format_type("string", "ip")
+                        .unwrap_or_else(|| "::std::net::IpAddr".to_string()),
                     &[TypeSpaceImpl::Display, TypeSpaceImpl::FromStr],
                 ),
                 metadata,
             )),
             Some("ipv4") => Ok((
                 TypeEntry::new_native(
-                    "::std::net::Ipv4Addr",
+                    self.settings
+                        .format_type("string", "ipv4")
+                        .unwrap_or_else(|| "::std::net::Ipv4Addr".to_string()),
                     &[TypeSpaceImpl::Display, TypeSpaceImpl::FromStr],
                 ),
                 metadata,
             )),
             Some("ipv6") => Ok((
                 TypeEntry::new_native(
-                    "::std::net::Ipv6Addr",
+                    self.settings
+                        .format_type("string", "ipv6")
+                        .unwrap_or_else(|| "::std::net::Ipv6Addr".to_string()),
                     &[TypeSpaceImpl::Display, TypeSpaceImpl::FromStr],
                 ),
                 metadata,
@@ -896,6 +902,12 @@ impl TypeSpace {
             // one of the recognized values above.
             other => {
                 if let Some(unhandled) = other {
+                    // A configured mapping for a format typify doesn't
+                    // recognize emits the given type verbatim; nothing is
+                    // known about it, so no trait impls are claimed.
+                    if let Some(type_name) = self.settings.format_type("string", unhandled) {
+                        return Ok((TypeEntry::new_native(type_name, &[]), metadata));
+                    }
                     debug!("treating a string format '{}' as a String", unhandled);
                 }
 
@@ -1027,6 +1039,16 @@ impl TypeSpace {
         validation: &Option<Box<schemars::schema::NumberValidation>>,
         format: &Option<String>,
     ) -> Result<(TypeEntry, &'a Option<Box<Metadata>>)> {
+        // A configured `(integer, format)` mapping wins over the built-in
+        // width selection and bypasses the range / default-value checks —
+        // the caller has taken ownership of the type's semantics. No trait
+        // impls are claimed for the verbatim type.
+        if let Some(format) = format {
+            if let Some(type_name) = self.settings.format_type("integer", format) {
+                return Ok((TypeEntry::new_native(type_name, &[]), metadata));
+            }
+        }
+
         let (mut min, mut max, multiple) = if let Some(validation) = validation {
             let min = match (&validation.minimum, &validation.exclusive_minimum) {
                 (None, None) => None,
@@ -1246,6 +1268,14 @@ impl TypeSpace {
             assert!(validation.exclusive_minimum.is_none());
         }
         */
+
+        // A configured `(number, format)` mapping wins over the built-in
+        // float selection; see `convert_integer` for the semantics.
+        if let Some(format) = format {
+            if let Some(type_name) = self.settings.format_type("number", format) {
+                return Ok((TypeEntry::new_native(type_name, &[]), metadata));
+            }
+        }
 
         match format.as_deref() {
             Some("float") => Ok((TypeEntry::new_float("f32"), metadata)),

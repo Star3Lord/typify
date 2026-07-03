@@ -94,6 +94,96 @@ fn uuid_type_override_replaces_uuid() {
     assert_not_contains(&out, "uuid :: Uuid");
 }
 
+// A schema with a single field of the given instance type and format.
+fn schema_with_type_format(instance_type: &str, format: &str) -> serde_json::Value {
+    json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "Container",
+        "type": "object",
+        "required": ["field"],
+        "properties": {
+            "field": { "type": instance_type, "format": format }
+        }
+    })
+}
+
+#[test]
+fn format_type_maps_unknown_string_format() {
+    let out = generate(schema_with_type_format("string", "decimal"), |s| {
+        s.with_format_type("string", "decimal", "::rust_decimal::Decimal");
+    });
+    assert_contains(&out, "field : :: rust_decimal :: Decimal");
+}
+
+#[test]
+fn format_type_miss_falls_back_to_default() {
+    // A mapping for a different format leaves this one on the default
+    // path: unknown string formats degrade to plain String.
+    let out = generate(schema_with_type_format("string", "money"), |s| {
+        s.with_format_type("string", "decimal", "::rust_decimal::Decimal");
+    });
+    assert_contains(&out, "field : :: std :: string :: String");
+    assert_not_contains(&out, "rust_decimal");
+}
+
+#[test]
+fn format_type_wins_over_date_time_sugar() {
+    let out = generate(schema_with_format("date-time"), |s| {
+        s.with_date_time_type("::chrono::DateTime<::chrono::offset::Utc>");
+        s.with_format_type("string", "date-time", "::time::OffsetDateTime");
+    });
+    assert_contains(&out, ":: time :: OffsetDateTime");
+    assert_not_contains(&out, "chrono");
+}
+
+#[test]
+fn format_type_overrides_builtin_ip_format() {
+    let out = generate(schema_with_type_format("string", "ipv4"), |s| {
+        s.with_format_type("string", "ipv4", "::my_net::V4");
+    });
+    assert_contains(&out, "field : :: my_net :: V4");
+    assert_not_contains(&out, "std :: net");
+}
+
+#[test]
+fn format_type_maps_integer_format() {
+    let out = generate(schema_with_type_format("integer", "int64"), |s| {
+        s.with_format_type("integer", "int64", "::my_crate::BigInt");
+    });
+    assert_contains(&out, "field : :: my_crate :: BigInt");
+    assert_not_contains(&out, "field : i64");
+}
+
+#[test]
+fn format_type_maps_number_format() {
+    let out = generate(schema_with_type_format("number", "decimal"), |s| {
+        s.with_format_type("number", "decimal", "::rust_decimal::Decimal");
+    });
+    assert_contains(&out, "field : :: rust_decimal :: Decimal");
+    assert_not_contains(&out, "field : f64");
+}
+
+#[test]
+fn format_type_keys_distinguish_instance_types() {
+    // `string/int64` and `integer/int64` are distinct keys: a mapping for
+    // one never leaks onto the other.
+    let schema = json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "Container",
+        "type": "object",
+        "required": ["as_string", "as_integer"],
+        "properties": {
+            "as_string": { "type": "string", "format": "int64" },
+            "as_integer": { "type": "integer", "format": "int64" }
+        }
+    });
+    let out = generate(schema, |s| {
+        s.with_format_type("string", "int64", "::my_crate::StringInt");
+    });
+    assert_contains(&out, "as_string : :: my_crate :: StringInt");
+    assert_contains(&out, "as_integer : i64");
+}
+
 #[test]
 fn unconstrained_string_skips_newtype() {
     let schema = json!({

@@ -82,6 +82,14 @@ pub struct CliArgs {
     #[arg(long = "uuid-type", value_name = "PATH")]
     uuid_type: Option<String>,
 
+    /// Map a JSON Schema `<instance-type>/<format>` pair to a Rust type,
+    /// e.g. `--format-type string/decimal=::rust_decimal::Decimal`. May be
+    /// repeated. Instance types `string`, `integer`, and `number` are
+    /// covered; an entry wins over the built-in format handling and over
+    /// --date-type / --date-time-type / --uuid-type.
+    #[arg(long = "format-type", value_name = "TYPE/FORMAT=PATH")]
+    format_types: Vec<String>,
+
     /// Emit plain `String` instead of a per-field `#[serde(transparent)]`
     /// newtype for strings carrying `pattern` / `minLength` / `maxLength`
     /// constraints. Validation must then be enforced elsewhere.
@@ -322,6 +330,22 @@ pub fn convert(args: &CliArgs) -> Result<String> {
     if let Some(uuid_type) = &args.uuid_type {
         settings.with_uuid_type(uuid_type);
     }
+    for spec in &args.format_types {
+        let (instance_type, format, rust_type) = spec
+            .split_once('=')
+            .and_then(|(key, rust_type)| {
+                key.split_once('/')
+                    .map(|(instance_type, format)| (instance_type, format, rust_type))
+            })
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "--format-type argument {spec:?} must be \
+                     <instance-type>/<format>=<rust-type>, \
+                     e.g. string/decimal=::rust_decimal::Decimal",
+                )
+            })?;
+        settings.with_format_type(instance_type, format, rust_type);
+    }
     if args.unconstrained_string {
         settings.with_unconstrained_string(true);
     }
@@ -420,6 +444,7 @@ mod tests {
             date_type: None,
             date_time_type: None,
             uuid_type: None,
+            format_types: vec![],
             unconstrained_string: false,
             unconstrained_int: false,
             array_optionality: None,

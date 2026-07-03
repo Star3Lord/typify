@@ -44,6 +44,9 @@ Options:
       --uuid-type <PATH>
           Override the Rust type used for `{"type":"string","format":"uuid"}` schemas. The default is `::uuid::Uuid`
 
+      --format-type <TYPE/FORMAT=PATH>
+          Map a JSON Schema `<instance-type>/<format>` pair to a Rust type, e.g. `--format-type string/decimal=::rust_decimal::Decimal`. May be repeated. Instance types `string`, `integer`, and `number` are covered; an entry wins over the built-in format handling and over --date-type / --date-time-type / --uuid-type
+
       --unconstrained-string
           Emit plain `String` instead of a per-field `#[serde(transparent)]` newtype for strings carrying `pattern` / `minLength` / `maxLength` constraints. Validation must then be enforced elsewhere
 

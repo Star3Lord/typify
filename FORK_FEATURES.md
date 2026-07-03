@@ -24,6 +24,7 @@ surface, and the place in the code where it is implemented.
 | Date type override | `with_date_type` | `date_type` | `--date-type` |
 | Date-time type override | `with_date_time_type` | `date_time_type` | `--date-time-type` |
 | UUID type override | `with_uuid_type` | `uuid_type` | `--uuid-type` |
+| Generic format mapping | `with_format_type` | `format_types` | `--format-type` |
 | Unconstrained strings | `with_unconstrained_string` | `unconstrained_string` | `--unconstrained-string` |
 | Unconstrained integers | `with_unconstrained_int` | `unconstrained_int` | `--unconstrained-int` |
 | Optional arrays | `with_array_optionality` | `array_optionality` | `--array-optionality` |
@@ -56,6 +57,31 @@ Override the Rust types used for `format: date`, `format: date-time`, and
 (e.g. to `::std::string::String`) removes the corresponding crate dependency
 from the generated code. `TypeSpace::uses_chrono()` / `uses_uuid()` report
 `false` when an override is in place.
+
+## Generic format mapping
+
+**API:** `with_format_type(instance_type, format, rust_type)`
+**Implementation:** `typify-impl/src/convert.rs` (`convert_string`,
+`convert_integer`, `convert_number`); resolution in
+`TypeSpaceSettings::format_type` (`typify-impl/src/lib.rs`)
+
+Map any `(instance type, format)` pair to an arbitrary Rust type:
+`with_format_type("string", "decimal", "::rust_decimal::Decimal")`,
+`with_format_type("integer", "int64", "::my_crate::BigInt")`, …
+Covered instance types: `string` (known formats — `uuid`, `date`,
+`date-time`, `ip`/`ipv4`/`ipv6` — and unknown ones), `integer`, and
+`number`; the instance type in the key keeps `string/int64` distinct from
+`integer/int64`. An entry wins over typify's built-in format handling
+(integer range and default-value checks are bypassed) and over the three
+dedicated knobs above, which are sugar feeding the same lookup
+(`TypeSpaceSettings::format_type` — the single resolution point). The
+mapped path is emitted verbatim as a native type and is assumed to
+implement `Debug`/`Clone`/`Serialize`/`Deserialize` for the wire format;
+formats with built-in types keep their `Display`/`FromStr` trait claims,
+novel formats claim none. `uses_chrono()` / `uses_uuid()` report `false`
+when the corresponding format is mapped away. Macro:
+`format_types = { "string/decimal" = ::rust_decimal::Decimal }`; CLI:
+`--format-type string/decimal=::rust_decimal::Decimal` (repeatable).
 
 ## Unconstrained strings
 

@@ -368,6 +368,10 @@ pub struct TypeSpaceSettings {
     date_type: Option<String>,
     date_time_type: Option<String>,
     uuid_type: Option<String>,
+    // Generic format-keyed type overrides: `(instance type, format)` →
+    // Rust type path. Consulted before the three dedicated knobs above —
+    // see [`TypeSpaceSettings::format_type`], the single resolution point.
+    format_types: BTreeMap<(String, String), String>,
 
     // Wire-shape knobs that relax typify's "stricter than the wire"
     // defaults; each is opt-in and defaults to the historical behavior.
@@ -941,6 +945,56 @@ impl TypeSpaceSettings {
     pub fn with_uuid_type<S: ToString>(&mut self, type_name: S) -> &mut Self {
         self.uuid_type = Some(type_name.to_string());
         self
+    }
+
+    /// Override the Rust type emitted for schemas of the given JSON Schema
+    /// instance type carrying the given `format`, e.g.
+    /// `with_format_type("string", "date-time", "::time::OffsetDateTime")`
+    /// or `with_format_type("string", "decimal", "::rust_decimal::Decimal")`.
+    ///
+    /// Covered instance types are `"string"`, `"integer"`, and `"number"`
+    /// (the instance type keeps `string/int64` distinct from
+    /// `integer/int64`; entries for other instance types are never
+    /// consulted). An entry here wins over both typify's built-in format
+    /// handling (including the `uuid` / `date` / `date-time` / `ip*`
+    /// formats and the integer width tables — range and default-value
+    /// checks are bypassed) and the dedicated [`Self::with_date_type`] /
+    /// [`Self::with_date_time_type`] / [`Self::with_uuid_type`] knobs,
+    /// which act as sugar for the corresponding `string/…` entries.
+    ///
+    /// The type path is emitted verbatim as a "native" type: it must
+    /// implement `Debug`, `Clone`, `Serialize`, and `Deserialize` in a way
+    /// that round-trips the wire format. For formats typify has built-in
+    /// types for, the override inherits the built-in's trait claims
+    /// (`Display`, `FromStr`); for novel formats no trait impls are
+    /// assumed.
+    pub fn with_format_type<I: ToString, F: ToString, T: ToString>(
+        &mut self,
+        instance_type: I,
+        format: F,
+        rust_type: T,
+    ) -> &mut Self {
+        self.format_types.insert(
+            (instance_type.to_string(), format.to_string()),
+            rust_type.to_string(),
+        );
+        self
+    }
+
+    /// The override for an `(instance type, format)` pair, if any: the
+    /// generic [`Self::with_format_type`] map first, then the dedicated
+    /// date / date-time / uuid sugar knobs. This is the single resolution
+    /// point — every conversion site and both knob families go through it.
+    pub(crate) fn format_type(&self, instance_type: &str, format: &str) -> Option<String> {
+        self.format_types
+            .get(&(instance_type.to_string(), format.to_string()))
+            .cloned()
+            .or_else(|| match (instance_type, format) {
+                ("string", "date") => self.date_type.clone(),
+                ("string", "date-time") => self.date_time_type.clone(),
+                ("string", "uuid") => self.uuid_type.clone(),
+                _ => None,
+            })
     }
 
     /// When `true`, JSON Schema strings carrying `pattern:`, `minLength:`,
