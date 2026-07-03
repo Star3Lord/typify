@@ -1496,10 +1496,38 @@ impl TypeEntry {
                     }
                 });
 
+                // When the inner type is a native override that resolves to
+                // `::std::string::String` (e.g. `with_date_type("::std::string::String")`),
+                // the `From<#inner_type_name>` impl above is `From<String>`,
+                // and the std blanket `impl<T, U: Into<T>> TryFrom<U> for T`
+                // then already provides `TryFrom<String>`. Emitting the
+                // manual `TryFrom<String>` would be a conflicting impl
+                // (E0119), so we skip it; conversion from `String` remains
+                // available through the blanket impl.
+                let inner_is_string_path = matches!(
+                    inner_type_name.to_string().replace(' ', "").as_str(),
+                    "::std::string::String" | "std::string::String" | "String"
+                );
+
                 // TODO see the comment in has_impl related to this case.
                 let from_str_impl = (inner_type.has_impl(type_space, TypeSpaceImpl::FromStr)
                     && !is_str)
                     .then(|| {
+                        let try_from_string_impl = (!inner_is_string_path).then(|| {
+                            quote! {
+                                impl ::std::convert::TryFrom<String> for #type_name {
+                                    type Error = <#inner_type_name as
+                                        ::std::str::FromStr>::Err;
+
+                                    fn try_from(value: String) ->
+                                        ::std::result::Result<Self, Self::Error>
+                                    {
+                                        value.parse()
+                                    }
+                                }
+                            }
+                        });
+
                         quote! {
                             impl ::std::str::FromStr for #type_name {
                                 type Err = <#inner_type_name as
@@ -1521,16 +1549,7 @@ impl TypeEntry {
                                     value.parse()
                                 }
                             }
-                            impl ::std::convert::TryFrom<String> for #type_name {
-                                type Error = <#inner_type_name as
-                                    ::std::str::FromStr>::Err;
-
-                                fn try_from(value: String) ->
-                                    ::std::result::Result<Self, Self::Error>
-                                {
-                                    value.parse()
-                                }
-                            }
+                            #try_from_string_impl
                         }
                     });
 
