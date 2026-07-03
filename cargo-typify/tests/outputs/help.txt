@@ -76,8 +76,11 @@ Options:
           
           [possible values: merge, compose]
 
-      --include-schema-in-docs
-          Embed the full pretty-printed JSON Schema in each generated type's doc comment under a `# JSON schema` heading. Off by default so IDE hover popovers show only the schema's description
+      --no-schema-in-docs
+          Omit the pretty-printed JSON Schema `<details>` block from each generated type's doc comment (emitted by default, matching upstream), keeping IDE hover popovers minimal
+
+      --string-newtype-conveniences
+          Add `AsRef<str>` / `Display` (and `From<&str>` for unconstrained ones) convenience impls to string-wrapping newtypes
 
       --conditional-derive <FEATURE=DERIVE>
           Add a `#[cfg_attr(feature = "<feature>", derive(<derive>))]` to every generated struct, enum, and newtype. Pass as `feature=DerivePath` (e.g. `--conditional-derive schemars=schemars::JsonSchema`)

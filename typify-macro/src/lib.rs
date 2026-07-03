@@ -154,11 +154,16 @@ struct MacroSettings {
     #[serde(default)]
     allof_strategy: AllOfStrategy,
     /// Embed the full pretty-printed JSON Schema in each generated type's
-    /// doc comment under a `# JSON schema` heading. Defaults to `false` so
-    /// IDE hovers stay readable. See
+    /// doc comment (the upstream `<details>` block). Defaults to `true`,
+    /// matching upstream; set `false` to keep IDE hovers minimal. See
     /// [`typify_impl::TypeSpaceSettings::with_schema_in_docs`].
     #[serde(default)]
-    include_schema_in_docs: bool,
+    include_schema_in_docs: Option<bool>,
+    /// Add `AsRef<str>` / `Display` (and `From<&str>` for unconstrained
+    /// ones) to string-wrapping newtypes. See
+    /// [`typify_impl::TypeSpaceSettings::with_string_newtype_conveniences`].
+    #[serde(default)]
+    string_newtype_conveniences: bool,
     /// Cfg-gated derives applied per type kind. See
     /// [`typify_impl::TypeSpaceSettings::with_conditional_derive_for`].
     #[serde(default)]
@@ -315,6 +320,7 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
             deep_patches,
             allof_strategy,
             include_schema_in_docs,
+            string_newtype_conveniences,
             conditional_derives,
             conditional_attrs,
         } = serde_tokenstream::from_tokenstream(&item.into())?;
@@ -371,7 +377,10 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
         settings.with_elide_option_field_defaults(elide_option_field_defaults);
         settings.with_deep_patches(deep_patches);
         settings.with_allof_strategy(allof_strategy);
-        settings.with_schema_in_docs(include_schema_in_docs);
+        if let Some(include_schema_in_docs) = include_schema_in_docs {
+            settings.with_schema_in_docs(include_schema_in_docs);
+        }
+        settings.with_string_newtype_conveniences(string_newtype_conveniences);
         for conditional in conditional_derives {
             let kinds = conditional.kinds_filter();
             settings.with_conditional_derive_for(

@@ -692,3 +692,42 @@ fn conditional_derive_for_structs_skips_enums() {
     // Sanity: Color and Thing are both emitted.
     assert!(thing_idx > 0, "Thing should be present in output");
 }
+
+// A named unconstrained string definition (becomes a newtype) and a
+// pattern-constrained one (becomes a validating newtype).
+fn string_newtype_schema() -> serde_json::Value {
+    json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {
+            "PlainName": { "type": "string" },
+            "CodeName": { "type": "string", "pattern": "^[a-z]+$" }
+        }
+    })
+}
+
+#[test]
+fn string_newtype_conveniences_default_off_matches_upstream() {
+    let out = generate(string_newtype_schema(), |_| {});
+    // Upstream surface only: no `AsRef<str>` and no `From<&str>` on
+    // either newtype.
+    assert_not_contains(&out, "impl :: std :: convert :: AsRef < str > for PlainName");
+    assert_not_contains(&out, "impl :: std :: convert :: From < & str > for PlainName");
+    assert_not_contains(&out, "impl :: std :: convert :: AsRef < str > for CodeName");
+    assert_not_contains(&out, "impl :: std :: fmt :: Display for CodeName");
+}
+
+#[test]
+fn string_newtype_conveniences_add_read_and_construct_impls() {
+    let out = generate(string_newtype_schema(), |s| {
+        s.with_string_newtype_conveniences(true);
+    });
+    // Unconstrained: read-side impls plus cheap `From<&str>` construction.
+    assert_contains(&out, "impl :: std :: convert :: AsRef < str > for PlainName");
+    assert_contains(&out, "impl :: std :: fmt :: Display for PlainName");
+    assert_contains(&out, "impl :: std :: convert :: From < & str > for PlainName");
+    // Constrained: read-side impls only — construction must go through
+    // the validating FromStr / TryFrom path.
+    assert_contains(&out, "impl :: std :: convert :: AsRef < str > for CodeName");
+    assert_contains(&out, "impl :: std :: fmt :: Display for CodeName");
+    assert_not_contains(&out, "impl :: std :: convert :: From < & str > for CodeName");
+}

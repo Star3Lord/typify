@@ -9,8 +9,10 @@ stricter defaults.
 
 Everything upstream still works; every feature below is opt-in via
 `TypeSpaceSettings` (library), `import_types!` (macro), or `cargo typify`
-(CLI) — with one deliberate default change, noted in
-[Docs without embedded schema](#docs-without-embedded-schema).
+(CLI). With no knobs set, output is byte-identical to upstream — the
+upstream test goldens in this repository are unchanged, which keeps
+rebases onto upstream `main` conflict-free outside the feature hunks
+themselves.
 
 The sections below map each feature to the settings API, the macro/CLI
 surface, and the place in the code where it is implemented.
@@ -38,10 +40,10 @@ surface, and the place in the code where it is implemented.
 | Enum first-variant `Default` | `with_enum_first_variant_default` | — | — |
 | Deep patches (bulk) | `with_deep_patches` | `deep_patches` | `--deep-patches` |
 | Deep patches (per-field) | `with_deep_patch_filter` | — (library only) | — |
-| Schema in docs | `with_schema_in_docs` | `include_schema_in_docs` | `--include-schema-in-docs` |
+| Docs without embedded schema | `with_schema_in_docs(false)` | `include_schema_in_docs` | `--no-schema-in-docs` |
 | Partitioned output | `to_stream_partitioned` | — (library only) | — |
 | Schema-name → Rust-name map | `definition_rust_names` | — (library only) | — |
-| String newtype conveniences | always on | — | — |
+| String newtype conveniences | `with_string_newtype_conveniences` | `string_newtype_conveniences` | `--string-newtype-conveniences` |
 
 ## Native type overrides
 
@@ -291,21 +293,17 @@ so the annotation has a derive to ride on.
 **API:** `with_schema_in_docs(bool)`
 **Implementation:** `typify-impl/src/type_entry.rs` (`make_doc`)
 
-**This is the one intentional default change relative to upstream.** Doc
-comments now contain only the schema `description` by default; the full
-pretty-printed JSON Schema is opt-in. Two reasons:
+By default (matching upstream), every generated type's doc comment embeds
+the full pretty-printed JSON Schema in a
+`<details><summary>JSON schema</summary>…</details>` block after the
+schema `description`. `with_schema_in_docs(false)` omits the block and
+emits only the description.
 
-1. IDE hovers (rust-analyzer, and editors embedding it) rendered the
-   historical `<details><summary>JSON schema</summary>…</details>` block as
-   unstyled wrapped text — CommonMark splits the raw-HTML wrapper around the
-   fenced code block.
-2. The wrapper lines used `///` (one leading space in the doc string) while
-   schema lines used `#[doc = "..."]` (zero leading space); the asymmetry
-   broke fenced-code indent stripping.
-
-When enabled, the schema is emitted under a `# JSON schema` markdown heading
-with a fenced ```` ```json ```` block, every line as explicit
-`#[doc = "..."]` — which renders correctly in both rustdoc and hovers.
+Turning it off is useful when generated types are read primarily through
+IDE hovers: rust-analyzer's popover renderer splits the raw-HTML
+`<details>` wrapper around the fenced code block (CommonMark closes the
+HTML block at the blank line), so the schema renders as unstyled wrapped
+text and drowns out the description.
 
 ## Partitioned output
 
@@ -362,12 +360,14 @@ sanitization.
 
 ## String newtype conveniences
 
+**API:** `with_string_newtype_conveniences(bool)`
 **Implementation:** `typify-impl/src/type_entry.rs` (`output_newtype`)
 
-Newtypes wrapping `String` always implement `AsRef<str>` and `Display`
+Opt-in: newtypes wrapping `String` implement `AsRef<str>` and `Display`
 (printing the inner value). Unconstrained string newtypes additionally get
 `From<&str>`; constrained ones must go through the validating
-`FromStr` / `TryFrom` path.
+`FromStr` / `TryFrom` path. Off by default — the upstream impl surface is
+unchanged.
 
 ## Tests
 

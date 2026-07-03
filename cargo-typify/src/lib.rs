@@ -147,11 +147,16 @@ pub struct CliArgs {
     )]
     allof_strategy: Option<String>,
 
-    /// Embed the full pretty-printed JSON Schema in each generated type's
-    /// doc comment under a `# JSON schema` heading. Off by default so
-    /// IDE hover popovers show only the schema's description.
-    #[arg(long = "include-schema-in-docs", default_value = "false")]
-    include_schema_in_docs: bool,
+    /// Omit the pretty-printed JSON Schema `<details>` block from each
+    /// generated type's doc comment (emitted by default, matching
+    /// upstream), keeping IDE hover popovers minimal.
+    #[arg(long = "no-schema-in-docs", default_value = "false")]
+    no_schema_in_docs: bool,
+
+    /// Add `AsRef<str>` / `Display` (and `From<&str>` for unconstrained
+    /// ones) convenience impls to string-wrapping newtypes.
+    #[arg(long = "string-newtype-conveniences", default_value = "false")]
+    string_newtype_conveniences: bool,
 
     /// Add a `#[cfg_attr(feature = "<feature>", derive(<derive>))]` to every
     /// generated struct, enum, and newtype. Pass as `feature=DerivePath`
@@ -361,8 +366,11 @@ pub fn convert(args: &CliArgs) -> Result<String> {
         };
         settings.with_allof_strategy(strategy);
     }
-    if args.include_schema_in_docs {
-        settings.with_schema_in_docs(true);
+    if args.no_schema_in_docs {
+        settings.with_schema_in_docs(false);
+    }
+    if args.string_newtype_conveniences {
+        settings.with_string_newtype_conveniences(true);
     }
     for conditional in &args.conditional_derives {
         settings.with_conditional_derive(&conditional.cfg, &conditional.body);
@@ -420,7 +428,8 @@ mod tests {
             elide_option_field_defaults: false,
             deep_patches: false,
             allof_strategy: None,
-            include_schema_in_docs: false,
+            no_schema_in_docs: false,
+            string_newtype_conveniences: false,
             conditional_derives: vec![],
             conditional_attrs: vec![],
         }

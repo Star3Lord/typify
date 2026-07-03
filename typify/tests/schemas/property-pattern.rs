@@ -26,6 +26,31 @@ pub mod error {
     }
 }
 #[doc = "`TestGrammarForPatternProperties`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"title\": \"test grammar for pattern properties\","]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"required\": ["]
+#[doc = "    \"rules\""]
+#[doc = "  ],"]
+#[doc = "  \"properties\": {"]
+#[doc = "    \"rules\": {"]
+#[doc = "      \"type\": \"object\","]
+#[doc = "      \"patternProperties\": {"]
+#[doc = "        \"^[a-zA-Z_]\\\\w*$\": {"]
+#[doc = "          \"type\": \"string\""]
+#[doc = "        }"]
+#[doc = "      },"]
+#[doc = "      \"additionalProperties\": false"]
+#[doc = "    }"]
+#[doc = "  },"]
+#[doc = "  \"additionalProperties\": false"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TestGrammarForPatternProperties {
@@ -38,6 +63,16 @@ impl TestGrammarForPatternProperties {
     }
 }
 #[doc = "`TestGrammarForPatternPropertiesRulesKey`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"string\","]
+#[doc = "  \"pattern\": \"^[a-zA-Z_]\\\\w*$\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
 pub struct TestGrammarForPatternPropertiesRulesKey(::std::string::String);
@@ -50,16 +85,6 @@ impl ::std::ops::Deref for TestGrammarForPatternPropertiesRulesKey {
 impl ::std::convert::From<TestGrammarForPatternPropertiesRulesKey> for ::std::string::String {
     fn from(value: TestGrammarForPatternPropertiesRulesKey) -> Self {
         value.0
-    }
-}
-impl ::std::convert::AsRef<str> for TestGrammarForPatternPropertiesRulesKey {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for TestGrammarForPatternPropertiesRulesKey {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 impl ::std::str::FromStr for TestGrammarForPatternPropertiesRulesKey {

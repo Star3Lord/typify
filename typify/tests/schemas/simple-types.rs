@@ -26,6 +26,18 @@ pub mod error {
     }
 }
 #[doc = "`AnythingWorks`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"required\": ["]
+#[doc = "    \"value\""]
+#[doc = "  ]"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 pub struct AnythingWorks {
     pub value: ::serde_json::Value,
@@ -36,6 +48,21 @@ impl AnythingWorks {
     }
 }
 #[doc = "`FloatsArentTerribleImTold`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"properties\": {"]
+#[doc = "    \"flush_timeout\": {"]
+#[doc = "      \"type\": \"number\","]
+#[doc = "      \"format\": \"float\""]
+#[doc = "    }"]
+#[doc = "  }"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 pub struct FloatsArentTerribleImTold {
     #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
@@ -54,6 +81,17 @@ impl FloatsArentTerribleImTold {
     }
 }
 #[doc = "`JustOne`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": ["]
+#[doc = "    \"string\""]
+#[doc = "  ]"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(
     :: serde :: Deserialize,
     :: serde :: Serialize,
@@ -78,21 +116,6 @@ impl ::std::convert::From<JustOne> for ::std::string::String {
         value.0
     }
 }
-impl ::std::convert::AsRef<str> for JustOne {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for JustOne {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-impl ::std::convert::From<&str> for JustOne {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
 impl ::std::convert::From<::std::string::String> for JustOne {
     fn from(value: ::std::string::String) -> Self {
         Self(value)
@@ -104,7 +127,60 @@ impl ::std::str::FromStr for JustOne {
         Ok(Self(value.to_string()))
     }
 }
+impl ::std::fmt::Display for JustOne {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 #[doc = "`UintMinimumAndMaximum`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"required\": ["]
+#[doc = "    \"max\","]
+#[doc = "    \"min\","]
+#[doc = "    \"min_and_max\","]
+#[doc = "    \"min_non_zero\","]
+#[doc = "    \"min_uint_non_zero\","]
+#[doc = "    \"no_bounds\""]
+#[doc = "  ],"]
+#[doc = "  \"properties\": {"]
+#[doc = "    \"max\": {"]
+#[doc = "      \"type\": \"integer\","]
+#[doc = "      \"format\": \"uint64\","]
+#[doc = "      \"maximum\": 256.0"]
+#[doc = "    },"]
+#[doc = "    \"min\": {"]
+#[doc = "      \"type\": \"integer\","]
+#[doc = "      \"format\": \"uint64\","]
+#[doc = "      \"minimum\": 0.0"]
+#[doc = "    },"]
+#[doc = "    \"min_and_max\": {"]
+#[doc = "      \"type\": \"integer\","]
+#[doc = "      \"format\": \"uint64\","]
+#[doc = "      \"maximum\": 256.0,"]
+#[doc = "      \"minimum\": 1.0"]
+#[doc = "    },"]
+#[doc = "    \"min_non_zero\": {"]
+#[doc = "      \"type\": \"integer\","]
+#[doc = "      \"minimum\": 1.0"]
+#[doc = "    },"]
+#[doc = "    \"min_uint_non_zero\": {"]
+#[doc = "      \"type\": \"integer\","]
+#[doc = "      \"format\": \"uint64\","]
+#[doc = "      \"minimum\": 1.0"]
+#[doc = "    },"]
+#[doc = "    \"no_bounds\": {"]
+#[doc = "      \"type\": \"integer\","]
+#[doc = "      \"format\": \"uint64\""]
+#[doc = "    }"]
+#[doc = "  }"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 pub struct UintMinimumAndMaximum {
     pub max: u64,

@@ -26,6 +26,33 @@ pub mod error {
     }
 }
 #[doc = "`IdOrName`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"oneOf\": ["]
+#[doc = "    {"]
+#[doc = "      \"title\": \"Id\","]
+#[doc = "      \"allOf\": ["]
+#[doc = "        {"]
+#[doc = "          \"type\": \"string\","]
+#[doc = "          \"format\": \"uuid\""]
+#[doc = "        }"]
+#[doc = "      ]"]
+#[doc = "    },"]
+#[doc = "    {"]
+#[doc = "      \"title\": \"Name\","]
+#[doc = "      \"allOf\": ["]
+#[doc = "        {"]
+#[doc = "          \"$ref\": \"#/definitions/Name\""]
+#[doc = "        }"]
+#[doc = "      ]"]
+#[doc = "    }"]
+#[doc = "  ]"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum IdOrName {
@@ -85,6 +112,25 @@ impl ::std::convert::From<Name> for IdOrName {
     }
 }
 #[doc = "`IdOrNameRedundant`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"oneOf\": ["]
+#[doc = "    {"]
+#[doc = "      \"type\": \"string\","]
+#[doc = "      \"format\": \"uuid\""]
+#[doc = "    },"]
+#[doc = "    {"]
+#[doc = "      \"type\": \"string\","]
+#[doc = "      \"$ref\": \"#/definitions/Name\""]
+#[doc = "    }"]
+#[doc = "  ],"]
+#[doc = "  \"$comment\": \"tests references that include a redundant type field\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum IdOrNameRedundant {
@@ -144,6 +190,34 @@ impl ::std::convert::From<Name> for IdOrNameRedundant {
     }
 }
 #[doc = "`IdOrYolo`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"oneOf\": ["]
+#[doc = "    {"]
+#[doc = "      \"title\": \"Id\","]
+#[doc = "      \"allOf\": ["]
+#[doc = "        {"]
+#[doc = "          \"type\": \"string\","]
+#[doc = "          \"format\": \"uuid\""]
+#[doc = "        }"]
+#[doc = "      ]"]
+#[doc = "    },"]
+#[doc = "    {"]
+#[doc = "      \"title\": \"Yolo\","]
+#[doc = "      \"allOf\": ["]
+#[doc = "        {"]
+#[doc = "          \"type\": \"string\","]
+#[doc = "          \"pattern\": \".*\""]
+#[doc = "        }"]
+#[doc = "      ]"]
+#[doc = "    }"]
+#[doc = "  ]"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 #[serde(untagged)]
 pub enum IdOrYolo {
@@ -203,6 +277,16 @@ impl ::std::convert::From<IdOrYoloYolo> for IdOrYolo {
     }
 }
 #[doc = "`IdOrYoloYolo`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"string\","]
+#[doc = "  \"pattern\": \".*\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
 pub struct IdOrYoloYolo(::std::string::String);
@@ -215,16 +299,6 @@ impl ::std::ops::Deref for IdOrYoloYolo {
 impl ::std::convert::From<IdOrYoloYolo> for ::std::string::String {
     fn from(value: IdOrYoloYolo) -> Self {
         value.0
-    }
-}
-impl ::std::convert::AsRef<str> for IdOrYoloYolo {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for IdOrYoloYolo {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 impl ::std::str::FromStr for IdOrYoloYolo {
@@ -273,6 +347,19 @@ impl<'de> ::serde::Deserialize<'de> for IdOrYoloYolo {
     }
 }
 #[doc = "Names must begin with a lower case ASCII letter, be composed exclusively of lowercase ASCII, uppercase ASCII, numbers, and '-', and may not end with a '-'. Names cannot be a UUID though they may contain a UUID."]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"title\": \"A name unique within the parent collection\","]
+#[doc = "  \"description\": \"Names must begin with a lower case ASCII letter, be composed exclusively of lowercase ASCII, uppercase ASCII, numbers, and '-', and may not end with a '-'. Names cannot be a UUID though they may contain a UUID.\","]
+#[doc = "  \"type\": \"string\","]
+#[doc = "  \"maxLength\": 63,"]
+#[doc = "  \"pattern\": \"^(?![0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$)^[a-z][a-z0-9-]*[a-zA-Z0-9]$\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
 pub struct Name(::std::string::String);
@@ -285,16 +372,6 @@ impl ::std::ops::Deref for Name {
 impl ::std::convert::From<Name> for ::std::string::String {
     fn from(value: Name) -> Self {
         value.0
-    }
-}
-impl ::std::convert::AsRef<str> for Name {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for Name {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 impl ::std::str::FromStr for Name {

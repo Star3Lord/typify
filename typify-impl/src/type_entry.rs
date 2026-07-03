@@ -1553,11 +1553,11 @@ impl TypeEntry {
                         }
                     });
 
-                // String newtypes get their `Display` from the
-                // `str_convenience_impl` block below; everything else
-                // proxies through the inner type.
+                // When the convenience surface is on, string newtypes get
+                // their `Display` from the `str_convenience_impl` block
+                // below; everything else proxies through the inner type.
                 let display_impl = (inner_type.has_impl(type_space, TypeSpaceImpl::Display)
-                    && !is_str)
+                    && !(is_str && type_space.string_newtype_conveniences()))
                     .then(|| {
                         quote! {
                             impl ::std::fmt::Display for #type_name {
@@ -1826,12 +1826,13 @@ impl TypeEntry {
             }
         });
 
-        // Convenience impls for string newtypes: expose the inner value as
+        // Opt-in convenience impls for string newtypes
+        // (`with_string_newtype_conveniences`): expose the inner value as
         // `&str`, print it directly, and (when unconstrained) allow cheap
         // construction from a `&str`. Constrained newtypes only get the
         // read-side impls — construction must go through the validating
         // `FromStr` / `TryFrom` path.
-        let str_convenience_impl = is_str.then(|| {
+        let str_convenience_impl = (is_str && type_space.string_newtype_conveniences()).then(|| {
             let from_str_ref = matches!(constraints, TypeEntryNewtypeConstraints::None).then(|| {
                 quote! {
                     impl ::std::convert::From<&str> for #type_name {
@@ -2273,32 +2274,10 @@ fn deep_patch_attr(
 /// Build the doc comment that decorates each generated type.
 ///
 /// Always emits the human-readable description (or, if absent, the type's
-/// own name in backticks). When
-/// [`crate::TypeSpaceSettings::with_schema_in_docs`] is enabled on the
-/// owning [`TypeSpace`], also appends a `# JSON schema` markdown heading
-/// followed by a fenced `json` code block containing the full
-/// pretty-printed schema.
-///
-/// # Why a heading + fenced code block (and not `<details>`)
-///
-/// The historical shape — `<details><summary>JSON schema</summary>`
-/// followed by a fenced code block, then `</details>` — renders fine under
-/// `cargo doc` but breaks in rust-analyzer hover popovers for two reasons:
-///
-/// 1. CommonMark closes the raw-HTML block at the blank line after
-///    `</summary>`, leaving the fenced code block sandwiched between two
-///    unrelated raw-HTML siblings; the hover renderer skips syntax
-///    highlighting on it.
-/// 2. The wrapper lines were emitted via `///` (which `quote!` lowers to
-///    `#[doc = " ..."]`, with one leading space), while the schema lines
-///    were emitted via `#[doc = #schema_lines]` (with zero leading space).
-///    The asymmetric indentation prevents the fenced-code-block
-///    indent-stripping rule from firing and makes long string values
-///    word-wrap inside the popover.
-///
-/// Emitting a `# JSON schema` heading + fenced code block — with every
-/// wrapper line as an explicit `#[doc = "..."]` (zero leading space) —
-/// sidesteps both issues.
+/// own name in backticks), followed — unless
+/// [`crate::TypeSpaceSettings::with_schema_in_docs`] is disabled on the
+/// owning [`TypeSpace`] — by the upstream `<details><summary>JSON
+/// schema</summary>` block containing the full pretty-printed schema.
 fn make_doc(
     type_space: &TypeSpace,
     name: &str,
@@ -2318,21 +2297,17 @@ fn make_doc(
 
     let schema_json = serde_json::to_string_pretty(schema).unwrap();
     let schema_lines = schema_json.lines();
-
-    // Every wrapper line is emitted via `#[doc = "..."]` (zero leading
-    // space) so it lines up with the schema lines, which are also emitted
-    // that way. This avoids the indent-asymmetry issue described in the
-    // doc comment above.
     quote! {
         #[doc = #desc]
-        #[doc = ""]
-        #[doc = "# JSON schema"]
-        #[doc = ""]
-        #[doc = "```json"]
+        ///
+        /// <details><summary>JSON schema</summary>
+        ///
+        /// ```json
         #(
             #[doc = #schema_lines]
         )*
-        #[doc = "```"]
+        /// ```
+        /// </details>
     }
 }
 

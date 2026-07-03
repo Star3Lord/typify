@@ -376,12 +376,18 @@ pub struct TypeSpaceSettings {
     default_bool_optionality: DefaultBoolOptionality,
     allof_strategy: AllOfStrategy,
 
-    // When `true`, every generated type's doc comment includes a fenced
-    // JSON-Schema block under a `# JSON schema` heading. When `false`
-    // (the default), the doc comment contains only the human-readable
-    // description so IDE hovers stay readable. See
-    // [`Self::with_schema_in_docs`].
-    include_schema_in_docs: bool,
+    // When `true`, the upstream-default `<details><summary>JSON
+    // schema</summary>` block is omitted from generated doc comments and
+    // only the human-readable description is emitted. Stored inverted so
+    // the derived `Default` matches upstream behavior (schema included).
+    // See [`Self::with_schema_in_docs`].
+    omit_schema_in_docs: bool,
+
+    // When `true`, string-wrapping newtypes get convenience impls
+    // (`AsRef<str>`, `Display`, and `From<&str>` for unconstrained ones)
+    // in addition to the upstream surface. Opt-in; see
+    // [`Self::with_string_newtype_conveniences`].
+    string_newtype_conveniences: bool,
 }
 
 /// Per-field serde naming mode for generated struct properties.
@@ -1076,22 +1082,30 @@ impl TypeSpaceSettings {
         self
     }
 
-    /// When `true`, every generated type's doc comment includes the full
-    /// pretty-printed JSON Schema under a `# JSON schema` heading and a
-    /// fenced `json` code block, in addition to the schema's `description`.
-    /// When `false` (the default), only the description is emitted.
+    /// When `true` (the default, matching upstream), every generated
+    /// type's doc comment includes the full pretty-printed JSON Schema in
+    /// a `<details><summary>JSON schema</summary>` block after the
+    /// schema's `description`. When `false`, only the description is
+    /// emitted.
     ///
-    /// The JSON-schema block renders fine in `cargo doc`, but the simpler
-    /// HTML renderer used by rust-analyzer hover popovers breaks on the
-    /// historical `<details><summary>JSON schema</summary>...</details>`
-    /// shape: CommonMark splits the disclosure widget into two raw-HTML
-    /// siblings around the fenced code block, which then loses syntax
-    /// highlighting and styling. Defaulting this off keeps hover popovers
-    /// readable; turning it on emits a pure markdown heading + fenced code
-    /// block instead, which renders cleanly in both rustdoc and hover
-    /// tooltips.
+    /// The schema block renders fine in `cargo doc`, but the simpler HTML
+    /// renderer used by rust-analyzer hover popovers breaks on the
+    /// `<details>` shape: CommonMark splits the disclosure widget into two
+    /// raw-HTML siblings around the fenced code block, which then loses
+    /// syntax highlighting and styling. Turn this off when generated types
+    /// are read primarily through IDE hovers.
     pub fn with_schema_in_docs(&mut self, value: bool) -> &mut Self {
-        self.include_schema_in_docs = value;
+        self.omit_schema_in_docs = !value;
+        self
+    }
+
+    /// When `true`, string-wrapping newtypes implement `AsRef<str>` and
+    /// `Display` (printing the inner value), and unconstrained ones
+    /// additionally get `From<&str>`; constrained newtypes must still go
+    /// through the validating `FromStr` / `TryFrom` path. `false` (the
+    /// default) keeps the upstream impl surface.
+    pub fn with_string_newtype_conveniences(&mut self, value: bool) -> &mut Self {
+        self.string_newtype_conveniences = value;
         self
     }
 
@@ -1659,7 +1673,13 @@ impl TypeSpace {
     /// Whether the schema-in-docs knob is on; controls whether
     /// [`crate::type_entry::make_doc`] embeds the full JSON Schema.
     pub(crate) fn include_schema_in_docs(&self) -> bool {
-        self.settings.include_schema_in_docs
+        !self.settings.omit_schema_in_docs
+    }
+
+    /// Whether string newtypes get the convenience impl surface. See
+    /// [`TypeSpaceSettings::with_string_newtype_conveniences`].
+    pub(crate) fn string_newtype_conveniences(&self) -> bool {
+        self.settings.string_newtype_conveniences
     }
 
     /// Iterate over all types including those defined in this [TypeSpace] and

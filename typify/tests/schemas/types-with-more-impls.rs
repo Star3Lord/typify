@@ -26,6 +26,16 @@ pub mod error {
     }
 }
 #[doc = "`PatternString`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"string\","]
+#[doc = "  \"pattern\": \"xx\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
 pub struct PatternString(::std::string::String);
@@ -38,16 +48,6 @@ impl ::std::ops::Deref for PatternString {
 impl ::std::convert::From<PatternString> for ::std::string::String {
     fn from(value: PatternString) -> Self {
         value.0
-    }
-}
-impl ::std::convert::AsRef<str> for PatternString {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for PatternString {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 impl ::std::str::FromStr for PatternString {
@@ -96,6 +96,22 @@ impl<'de> ::serde::Deserialize<'de> for PatternString {
     }
 }
 #[doc = "`Sub10Primes`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"integer\","]
+#[doc = "  \"format\": \"uint\","]
+#[doc = "  \"enum\": ["]
+#[doc = "    2,"]
+#[doc = "    3,"]
+#[doc = "    5,"]
+#[doc = "    7"]
+#[doc = "  ]"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Serialize, Clone, Debug)]
 #[serde(transparent)]
 pub struct Sub10Primes(u32);

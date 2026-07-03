@@ -1476,13 +1476,19 @@ mod tests {
         let mut output = OutputSpace::default();
         type_entry.output(&type_space, &mut output);
         let actual = output.into_stream();
-        // The default is `with_schema_in_docs(false)` so the doc comment
-        // contains only the description (which falls back to the type name
-        // in backticks for this synthetic schema). See `make_doc` in
-        // `type_entry.rs`.
-        let _ = original_schema;
+        let schema_json = serde_json::to_string_pretty(&original_schema).unwrap();
+        let schema_lines = schema_json.lines();
         let expected = quote! {
             #[doc = "`ResultX`"]
+            ///
+            /// <details><summary>JSON schema</summary>
+            ///
+            /// ```json
+            #(
+                #[doc = #schema_lines]
+            )*
+            /// ```
+            /// </details>
             #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
             pub enum ResultX {
                 Ok(u32),
@@ -1520,10 +1526,15 @@ mod tests {
         let mut output = OutputSpace::default();
         type_entry.output(&type_space, &mut output);
         let actual = output.into_stream();
-        // Default is `with_schema_in_docs(false)`; only the description
-        // (here the fallback `` `ResultX` ``) is emitted.
         let expected = quote! {
             #[doc = "`ResultX`"]
+            ///
+            /// <details><summary>JSON schema</summary>
+            ///
+            /// ```json
+            #[doc = "true"]
+            /// ```
+            /// </details>
             #[derive(::serde::Deserialize, ::serde::Serialize, A, B, C, Clone, D, Debug)]
             pub enum ResultX {
                 Ok(u32),

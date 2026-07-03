@@ -26,6 +26,40 @@ pub mod error {
     }
 }
 #[doc = "`TestType`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"title\": \"TestType\","]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"required\": ["]
+#[doc = "    \"where_not\","]
+#[doc = "    \"why_not\""]
+#[doc = "  ],"]
+#[doc = "  \"properties\": {"]
+#[doc = "    \"where_not\": {"]
+#[doc = "      \"not\": {"]
+#[doc = "        \"enum\": ["]
+#[doc = "          \"start\","]
+#[doc = "          \"middle\","]
+#[doc = "          \"end\""]
+#[doc = "        ]"]
+#[doc = "      }"]
+#[doc = "    },"]
+#[doc = "    \"why_not\": {"]
+#[doc = "      \"not\": {"]
+#[doc = "        \"type\": \"string\","]
+#[doc = "        \"enum\": ["]
+#[doc = "          \"because\""]
+#[doc = "        ]"]
+#[doc = "      }"]
+#[doc = "    }"]
+#[doc = "  },"]
+#[doc = "  \"$comment\": \"validate a 'not' schema with typed- and untyped-subschemas\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 pub struct TestType {
     pub where_not: TestTypeWhereNot,
@@ -37,6 +71,21 @@ impl TestType {
     }
 }
 #[doc = "`TestTypeWhereNot`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"not\": {"]
+#[doc = "    \"enum\": ["]
+#[doc = "      \"start\","]
+#[doc = "      \"middle\","]
+#[doc = "      \"end\""]
+#[doc = "    ]"]
+#[doc = "  }"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
 pub struct TestTypeWhereNot(::std::string::String);
@@ -49,16 +98,6 @@ impl ::std::ops::Deref for TestTypeWhereNot {
 impl ::std::convert::From<TestTypeWhereNot> for ::std::string::String {
     fn from(value: TestTypeWhereNot) -> Self {
         value.0
-    }
-}
-impl ::std::convert::AsRef<str> for TestTypeWhereNot {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for TestTypeWhereNot {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 impl ::std::convert::TryFrom<::std::string::String> for TestTypeWhereNot {
@@ -83,6 +122,20 @@ impl<'de> ::serde::Deserialize<'de> for TestTypeWhereNot {
     }
 }
 #[doc = "`TestTypeWhyNot`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"not\": {"]
+#[doc = "    \"type\": \"string\","]
+#[doc = "    \"enum\": ["]
+#[doc = "      \"because\""]
+#[doc = "    ]"]
+#[doc = "  }"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Serialize, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
 pub struct TestTypeWhyNot(::std::string::String);
@@ -95,16 +148,6 @@ impl ::std::ops::Deref for TestTypeWhyNot {
 impl ::std::convert::From<TestTypeWhyNot> for ::std::string::String {
     fn from(value: TestTypeWhyNot) -> Self {
         value.0
-    }
-}
-impl ::std::convert::AsRef<str> for TestTypeWhyNot {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for TestTypeWhyNot {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 impl ::std::convert::TryFrom<::std::string::String> for TestTypeWhyNot {

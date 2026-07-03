@@ -26,6 +26,17 @@ pub mod error {
     }
 }
 #[doc = "`DeadSimple`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"title\": \"DeadSimple\","]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"$comment\": \"usual case of a map whose name must come from its title\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 #[serde(transparent)]
 pub struct DeadSimple(pub ::serde_json::Map<::std::string::String, ::serde_json::Value>);
@@ -50,6 +61,16 @@ impl ::std::convert::From<::serde_json::Map<::std::string::String, ::serde_json:
     }
 }
 #[doc = "`Eh`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"string\","]
+#[doc = "  \"format\": \"^a*$\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(
     :: serde :: Deserialize,
     :: serde :: Serialize,
@@ -74,21 +95,6 @@ impl ::std::convert::From<Eh> for ::std::string::String {
         value.0
     }
 }
-impl ::std::convert::AsRef<str> for Eh {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for Eh {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-impl ::std::convert::From<&str> for Eh {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
 impl ::std::convert::From<::std::string::String> for Eh {
     fn from(value: ::std::string::String) -> Self {
         Self(value)
@@ -100,7 +106,28 @@ impl ::std::str::FromStr for Eh {
         Ok(Self(value.to_string()))
     }
 }
+impl ::std::fmt::Display for Eh {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 #[doc = "`MapWithDateKeys`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"additionalProperties\": {"]
+#[doc = "    \"$ref\": \"#/definitions/Value\""]
+#[doc = "  },"]
+#[doc = "  \"propertyNames\": {"]
+#[doc = "    \"format\": \"date\""]
+#[doc = "  },"]
+#[doc = "  \"$comment\": \"test that a type isn't needed for propertyNames\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 #[serde(transparent)]
 pub struct MapWithDateKeys(pub ::std::collections::HashMap<::chrono::naive::NaiveDate, Value>);
@@ -125,6 +152,22 @@ impl ::std::convert::From<::std::collections::HashMap<::chrono::naive::NaiveDate
     }
 }
 #[doc = "`MapWithDateTimeKeys`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"additionalProperties\": {"]
+#[doc = "    \"$ref\": \"#/definitions/Value\""]
+#[doc = "  },"]
+#[doc = "  \"propertyNames\": {"]
+#[doc = "    \"format\": \"date-time\""]
+#[doc = "  },"]
+#[doc = "  \"$comment\": \"test that a type isn't needed for propertyNames\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 #[serde(transparent)]
 pub struct MapWithDateTimeKeys(
@@ -157,6 +200,21 @@ impl
     }
 }
 #[doc = "`MapWithKeys`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"object\","]
+#[doc = "  \"additionalProperties\": {"]
+#[doc = "    \"$ref\": \"#/definitions/Value\""]
+#[doc = "  },"]
+#[doc = "  \"propertyNames\": {"]
+#[doc = "    \"$ref\": \"#/definitions/Eh\""]
+#[doc = "  }"]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
 #[serde(transparent)]
 pub struct MapWithKeys(pub ::std::collections::HashMap<Eh, Value>);
@@ -177,6 +235,15 @@ impl ::std::convert::From<::std::collections::HashMap<Eh, Value>> for MapWithKey
     }
 }
 #[doc = "`Value`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"string\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
 #[derive(
     :: serde :: Deserialize,
     :: serde :: Serialize,
@@ -201,21 +268,6 @@ impl ::std::convert::From<Value> for ::std::string::String {
         value.0
     }
 }
-impl ::std::convert::AsRef<str> for Value {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-impl ::std::fmt::Display for Value {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-impl ::std::convert::From<&str> for Value {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
 impl ::std::convert::From<::std::string::String> for Value {
     fn from(value: ::std::string::String) -> Self {
         Self(value)
@@ -225,6 +277,11 @@ impl ::std::str::FromStr for Value {
     type Err = ::std::convert::Infallible;
     fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
         Ok(Self(value.to_string()))
+    }
+}
+impl ::std::fmt::Display for Value {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 fn main() {}
