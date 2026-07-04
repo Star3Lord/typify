@@ -2393,7 +2393,18 @@ impl TypeSpace {
         metadata: &'a Option<Box<Metadata>>,
         schema: &'_ Schema,
     ) -> Result<(TypeEntry, &'a Option<Box<Metadata>>)> {
-        let (ty, _) = self.convert_schema(type_name, schema)?;
+        // As in the `type: [T, "null"]` arm above: when the option
+        // itself carries a required name (a named definition), the
+        // *inner* type must not reuse it — the Option gets a newtype
+        // wrapper under that name, and an inline inner (an object or
+        // an allOf, say) taking the same name collides with its own
+        // wrapper: `X(Option<X>)`. Suggest `{name}Inner` instead;
+        // references and built-ins ignore the suggestion.
+        let inner_type_name = match &type_name {
+            Name::Required(name) => Name::Suggested(format!("{}Inner", name)),
+            other => other.clone(),
+        };
+        let (ty, _) = self.convert_schema(inner_type_name, schema)?;
         let ty = self.type_to_option(ty);
 
         Ok((ty, metadata))

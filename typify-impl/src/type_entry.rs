@@ -1815,16 +1815,29 @@ impl TypeEntry {
             _ => None,
         };
 
-        let default_impl = default.as_ref().map(|value| {
-            let default_stream = self.output_value(type_space, &value.0, &quote! {}).unwrap();
-            quote! {
-                impl ::std::default::Default for #type_name {
-                    fn default() -> Self {
-                        #default_stream
+        // As for structs above: when `Default` is in the unconditional
+        // derive list for newtypes, the derive already produces an impl
+        // and a hand-written one would clash (E0119). The schema default
+        // still applies at deserialization; `X::default()` returns the
+        // inner type's default instead of the schema-provided value.
+        let unconditional_default_for_newtypes = type_space
+            .settings
+            .unconditional_derives
+            .iter()
+            .any(|u| u.derive == "Default" && u.kinds.matches(crate::TypeKind::Newtype));
+        let default_impl = default
+            .as_ref()
+            .filter(|_| !unconditional_default_for_newtypes)
+            .map(|value| {
+                let default_stream = self.output_value(type_space, &value.0, &quote! {}).unwrap();
+                quote! {
+                    impl ::std::default::Default for #type_name {
+                        fn default() -> Self {
+                            #default_stream
+                        }
                     }
                 }
-            }
-        });
+            });
 
         // Opt-in convenience impls for string newtypes
         // (`with_string_newtype_conveniences`): expose the inner value as
