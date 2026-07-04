@@ -1026,9 +1026,19 @@ impl TypeSpace {
                 self.convert_never(type_name, original_schema)
             }
         } else {
+            // As in the `type: [T, "null"]` arm: an enum whose values
+            // include `null` becomes an Option, and when the schema is
+            // a named definition the Option's newtype wrapper takes
+            // that name — the enum itself must not reuse it
+            // (`X(Option<X>)` collides). Plaid's null-member string
+            // enums hit this.
+            let enum_type_name = match (&type_name, has_null) {
+                (Name::Required(name), true) => Name::Suggested(format!("{}Inner", name)),
+                _ => type_name,
+            };
             let mut ty = TypeEntryEnum::from_metadata(
                 self,
-                type_name,
+                enum_type_name,
                 metadata,
                 EnumTagType::External,
                 variants,

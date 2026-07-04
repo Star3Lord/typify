@@ -1055,8 +1055,19 @@ impl TypeEntry {
                         let variant_type = type_space.id_to_entry.get(type_id).unwrap();
 
                         // TODO Strings might conflict with the way we're
-                        // dealing with TryFrom<String> right now.
-                        (variant_type.details != TypeEntryDetails::String).then(|| {
+                        // dealing with TryFrom<String> right now. That
+                        // includes native `::std::string::String` entries
+                        // (a `with_date_time_type`-style override mapping
+                        // a format to String): `From<String>` + the
+                        // `TryFrom<String>` ladder collide through core's
+                        // blanket impl.
+                        let is_string = variant_type.details == TypeEntryDetails::String
+                            || matches!(
+                                &variant_type.details,
+                                TypeEntryDetails::Native(native)
+                                    if native.type_name == "::std::string::String"
+                            );
+                        (!is_string).then(|| {
                             let variant_type_ident = variant_type.type_ident(type_space, &None);
                             let variant_name =
                                 format_ident!("{}", variant.ident_name.as_ref().unwrap());
