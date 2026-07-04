@@ -44,7 +44,7 @@ mod value;
 #[allow(missing_docs)]
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("unexpected value type")]
+    #[error("unexpected value type: expected {0}, got `{1}`")]
     BadValue(String, serde_json::Value),
     #[error("invalid TypeId")]
     InvalidTypeId,

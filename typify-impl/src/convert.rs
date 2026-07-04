@@ -85,11 +85,22 @@ impl TypeSpace {
                             .cloned()
                             .collect()
                     });
-                    let ss = Schema::Object(SchemaObject {
+                    let mut inner_schema = SchemaObject {
                         instance_type: Some(SingleOrVec::from(*other_type)),
                         enum_values,
                         ..schema.clone()
-                    });
+                    };
+                    // A `default: null` belongs to the Option this
+                    // schema becomes (where null is the intrinsic
+                    // default), not to the inner non-null type — there
+                    // it would fail default validation ("value does
+                    // not conform to the given schema").
+                    if let Some(inner_metadata) = &mut inner_schema.metadata {
+                        if matches!(inner_metadata.default, Some(serde_json::Value::Null)) {
+                            inner_metadata.default = None;
+                        }
+                    }
+                    let ss = Schema::Object(inner_schema);
                     // An Option type won't usually get a name--unless one is
                     // required (in which case we'll generated a newtype
                     // wrapper to give it a name). In such a case, we invent a
