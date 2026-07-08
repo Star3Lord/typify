@@ -39,6 +39,7 @@ surface, and the place in the code where it is implemented.
 | Struct `rename_all` + elision | `with_struct_rename_all` | — | — |
 | Dual casing surfaces | `with_serde_field_case` | — | — |
 | Enum first-variant `Default` | `with_enum_first_variant_default` | — | — |
+| Open string enums | `with_open_string_enums` | — | — |
 | Deep patches (bulk) | `with_deep_patches` | `deep_patches` | `--deep-patches` |
 | Deep patches (per-field) | `with_deep_patch_filter` | — (library only) | — |
 | Docs without embedded schema | `with_schema_in_docs(false)` | `include_schema_in_docs` | `--no-schema-in-docs` |
@@ -292,6 +293,31 @@ that derive `Default` (via [ordered derive lists](#ordered-derive-lists))
 compile when they contain required enum fields. Enums with a schema `default`
 keep the schema-mandated impl; enums with no Simple variants are skipped.
 
+## Open string enums
+
+**API:** `with_open_string_enums(variant_name)`
+**Implementation:** `typify-impl/src/type_entry.rs` (`output_enum`)
+
+Specs frequently document a closed value list while the live wire sends
+values outside it. With this knob, every externally tagged all-simple
+(string) enum gains a trailing catch-all variant:
+
+```rust
+#[serde(untagged)]
+Other(::std::string::String),
+```
+
+Undocumented values deserialize into the catch-all carrying the raw
+string and re-serialize verbatim — a lossless round-trip instead of a
+decode failure. The `Display` / `FromStr` ladder follows: `Display`
+writes the carried string; `FromStr` becomes irrefutable. Opened enums
+drop `Copy` (the catch-all owns a `String`) but keep the rest of the
+historical simple-enum derive set. Enums already declaring a variant
+with the configured name are left closed (no collision), as are
+tagged/tuple/struct enums. Schema `default:` values and the
+first-variant `Default` are unaffected — the catch-all is never picked
+as a default.
+
 ## Deep patches for `struct_patch`
 
 **API:** `with_deep_patches(DeepPatchPolicy)`, `with_deep_patch_filter(closure)`
@@ -313,6 +339,25 @@ Fields that would not type-check are never annotated: `#[serde(flatten)]`
 bases, `Vec<_>`, and `Option<T>` where `T` is an enum / newtype / primitive.
 Pair with `with_unconditional_derive_for("Patch", TypeKindFilter::STRUCTS)`
 so the annotation has a derive to ride on.
+
+### Patch-companion naming mirror
+
+**Implementation:** `typify-impl/src/structs.rs` (`generate_serde_attr`),
+emitted in `typify-impl/src/type_entry.rs` (`output_struct`)
+
+`struct_patch`'s derive does not carry a host field's serde attributes over
+to the generated `{Type}Patch` companion, so a field with an explicit
+`#[serde(rename = "...")]` (one the struct-level `rename_all` does not
+cover) would get a companion field addressing a *different* wire key —
+values sent under the host's documented name are silently dropped when
+deserialized into the patch. Whenever a struct's final derive list carries
+a `Patch` derive (any path whose last segment is `Patch`), every explicit
+field-naming serde option (`rename` / `alias`, including the
+`SerdeFieldCase` dual-casing pairs) is therefore automatically mirrored as
+`#[patch(attribute(serde(rename = ..., alias = ...)))]` on that field.
+Not configurable: an unmirrored rename is never correct. `flatten` fields
+are not mirrored — companions can't inherit `flatten`; use
+`AllOfStrategy::Merge` for patchable composition.
 
 ## Docs without embedded schema
 

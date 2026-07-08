@@ -789,13 +789,39 @@ impl TypeEntry {
 
         let doc = make_doc(type_space, name, description.as_ref(), schema);
 
+        // The open-enum catch-all (see `with_open_string_enums`): plain
+        // externally-tagged string enums gain a trailing
+        // `#[serde(untagged)] <Name>(String)` variant so undocumented wire
+        // values round-trip instead of failing deserialization. Enums that
+        // already declare a variant with the configured name stay closed —
+        // opening them would collide.
+        let open_variant = type_space
+            .settings
+            .open_string_enums()
+            .filter(|_| {
+                tag_type == &EnumTagType::External
+                    && bespoke_impls.contains(&TypeEntryEnumImpl::AllSimpleVariants)
+            })
+            .filter(|open_name| {
+                variants
+                    .iter()
+                    .all(|variant| variant.ident_name.as_deref() != Some(open_name))
+            })
+            .map(|open_name| format_ident!("{}", open_name));
+
         // TODO this is a one-off for some useful traits; this should move into
         // the creation of the enum type.
         if variants
             .iter()
             .all(|variant| matches!(variant.details, VariantDetails::Simple))
         {
-            derive_set.extend(["Copy", "PartialOrd", "Ord", "PartialEq", "Eq", "Hash"]);
+            // An opened enum owns a `String` in its catch-all, so `Copy` is
+            // off the table; everything else in the historical set holds.
+            if open_variant.is_some() {
+                derive_set.extend(["PartialOrd", "Ord", "PartialEq", "Eq", "Hash"]);
+            } else {
+                derive_set.extend(["Copy", "PartialOrd", "Ord", "PartialEq", "Eq", "Hash"]);
+            }
         }
 
         let mut serde_options = Vec::new();
@@ -825,10 +851,18 @@ impl TypeEntry {
 
         let type_name = format_ident!("{}", name);
 
-        let variants_decl = variants
+        let mut variants_decl = variants
             .iter()
             .map(|variant| output_variant(variant, type_space, output, name))
             .collect::<Vec<_>>();
+        if let Some(open) = &open_variant {
+            variants_decl.push(quote! {
+                #[doc = r" Catch-all for values outside the documented set;"]
+                #[doc = r" carries the raw wire string."]
+                #[serde(untagged)]
+                #open(::std::string::String),
+            });
+        }
 
         // It should not be possible to construct an untagged enum
         // with more than one simple variant--it would not be usable.
@@ -856,11 +890,29 @@ impl TypeEntry {
                     })
                     .unzip();
 
+                // An opened enum's ladder gains catch-all arms: `Display`
+                // writes the carried string and `FromStr` becomes
+                // irrefutable. The closed shape (including its `match
+                // *self`, which the catch-all's `String` cannot support)
+                // is preserved byte-for-byte when the knob is off.
+                let display_scrutinee = match &open_variant {
+                    Some(_) => quote! { self },
+                    None => quote! { *self },
+                };
+                let display_fallback = open_variant.as_ref().map(|open| {
+                    quote! { Self::#open(value) => f.write_str(value.as_str()), }
+                });
+                let from_str_fallback = match &open_variant {
+                    Some(open) => quote! { _ => Ok(Self::#open(value.to_string())), },
+                    None => quote! { _ => Err("invalid value".into()), },
+                };
+
                 quote! {
                     impl ::std::fmt::Display for #type_name {
                         fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                            match *self {
+                            match #display_scrutinee {
                                 #(Self::#match_variants => f.write_str(#match_strs),)*
+                                #display_fallback
                             }
                         }
                     }
@@ -872,7 +924,7 @@ impl TypeEntry {
                         {
                             match value {
                                 #(#match_strs => Ok(Self::#match_variants),)*
-                                _ => Err("invalid value".into()),
+                                #from_str_fallback
                             }
                         }
                     }
@@ -1204,6 +1256,27 @@ impl TypeEntry {
 
         let type_name = format_ident!("{}", name);
 
+        // The final derive list is needed before the property loop: when it
+        // carries a `Patch` derive, each renamed field must also emit the
+        // patch-companion naming mirror computed by `generate_serde_attr`
+        // (struct_patch does not carry field serde attributes over to the
+        // `{Type}Patch` companion, so an unmirrored rename makes the
+        // companion address the wrong wire key).
+        let derives = compute_derive_list(
+            type_space,
+            crate::TypeKind::Struct,
+            derive_set,
+            &self.extra_derives,
+            &type_space.settings.extra_derives,
+        );
+        let has_patch_derive = derives.iter().any(|derive| {
+            derive
+                .to_string()
+                .rsplit("::")
+                .next()
+                .is_some_and(|segment| segment.trim() == "Patch")
+        });
+
         // Gather the various components for all properties.
         let mut prop_doc = Vec::new();
         let mut prop_serde = Vec::new();
@@ -1227,7 +1300,7 @@ impl TypeEntry {
             prop_type_scoped
                 .push(prop_type_entry.type_ident(type_space, &Some("super".to_string())));
 
-            let (serde, default_fn) = generate_serde_attr(
+            let (serde, default_fn, patch_naming_mirror) = generate_serde_attr(
                 name,
                 &prop.name,
                 &prop.wire_name,
@@ -1240,7 +1313,9 @@ impl TypeEntry {
             );
 
             prop_serde.push(serde);
-            prop_patch.push(deep_patch_attr(type_space, name, prop));
+            let deep_patch = deep_patch_attr(type_space, name, prop);
+            let naming_mirror = has_patch_derive.then_some(patch_naming_mirror).flatten();
+            prop_patch.push(quote! { #deep_patch #naming_mirror });
             prop_default.push(match default_fn {
                 DefaultFunction::Default => PropDefault::Default(quote! {
                     Default::default()
@@ -1257,14 +1332,6 @@ impl TypeEntry {
                 }
             });
         });
-
-        let derives = compute_derive_list(
-            type_space,
-            crate::TypeKind::Struct,
-            derive_set,
-            &self.extra_derives,
-            &type_space.settings.extra_derives,
-        );
 
         let attrs = strings_to_attrs(&self.extra_attrs, &type_space.settings.extra_attrs);
         let extra_attr_lists = type_attr_lists(type_space, crate::TypeKind::Struct);

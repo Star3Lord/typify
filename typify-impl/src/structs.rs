@@ -357,6 +357,18 @@ pub(crate) enum DefaultFunction {
 /// Note that if we have several serde attribute parameters, they could each
 /// appear in their own attribute. We choose to condense them for the sake of
 /// legibility.
+///
+/// The third element of the returned tuple is the *patch-companion naming
+/// mirror*: a `#[patch(attribute(serde(rename = ...)))]` line repeating any
+/// field-naming serde options (`rename` / `alias`) chosen here. The
+/// `struct_patch::Patch` derive does not carry a host field's serde
+/// attributes over to the generated `{Type}Patch` companion, so without the
+/// mirror a renamed field's patch companion addresses a *different* wire
+/// key and silently drops the caller's value. Callers that emit the `Patch`
+/// derive on the containing struct must emit the mirror alongside the field;
+/// all other callers discard it ([`None`] whenever there is nothing to
+/// mirror — flattened fields included, since companions never inherit
+/// `flatten` and composition is handled by `AllOfStrategy::Merge` instead).
 pub(crate) fn generate_serde_attr(
     type_name: &str,
     prop_name: &str,
@@ -367,29 +379,36 @@ pub(crate) fn generate_serde_attr(
     prop_type: &TypeEntry,
     type_space: &TypeSpace,
     output: &mut OutputSpace,
-) -> (TokenStream, DefaultFunction) {
+) -> (TokenStream, DefaultFunction, Option<TokenStream>) {
     let mut serde_options = Vec::new();
+    let mut naming_options = Vec::new();
     match (type_space.settings.serde_field_case(), naming) {
         (_, StructPropertyRename::Flatten) => serde_options.push(quote! { flatten }),
         (Some(SerdeFieldCase::Wire), _) => {
             if wire_name != prop_name {
-                serde_options.push(quote! { rename = #wire_name });
+                naming_options.push(quote! { rename = #wire_name });
             }
             if api_name != wire_name {
-                serde_options.push(quote! { alias = #api_name });
+                naming_options.push(quote! { alias = #api_name });
             }
         }
         (Some(SerdeFieldCase::Snake), _) => {
             if api_name != prop_name {
-                serde_options.push(quote! { rename = #api_name });
+                naming_options.push(quote! { rename = #api_name });
             }
             if wire_name != api_name {
-                serde_options.push(quote! { alias = #wire_name });
+                naming_options.push(quote! { alias = #wire_name });
             }
         }
-        (None, StructPropertyRename::Rename(s)) => serde_options.push(quote! { rename = #s }),
+        (None, StructPropertyRename::Rename(s)) => {
+            naming_options.push(quote! { rename = #s })
+        }
         (None, StructPropertyRename::None) => (),
     }
+    let patch_naming_mirror = (!naming_options.is_empty()).then(|| {
+        quote! { #[patch(attribute(serde( #(#naming_options),* )))] }
+    });
+    serde_options.extend(naming_options);
 
     let default_fn = match (state, &prop_type.details) {
         (StructPropertyState::Optional, TypeEntryDetails::Option(_)) => {
@@ -474,7 +493,7 @@ pub(crate) fn generate_serde_attr(
         }
     };
 
-    (serde, default_fn)
+    (serde, default_fn, patch_naming_mirror)
 }
 
 /// See if this type is a type that we can omit with a serde directive; note

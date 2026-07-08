@@ -815,7 +815,11 @@ pub(crate) fn output_variant(
                 let prop_doc = prop.description.as_ref().map(|s| quote! { #[doc = #s] });
 
                 let prop_type_entry = type_space.id_to_entry.get(&prop.type_id).unwrap();
-                let (prop_serde, _) = generate_serde_attr(
+                // The patch-companion naming mirror is discarded: enum
+                // variants never derive `struct_patch::Patch` (the
+                // proc-macro forbids enums), so there is no companion to
+                // mirror into.
+                let (prop_serde, _, _) = generate_serde_attr(
                     &format!("{}{}", type_name, variant.ident_name.as_ref().unwrap()),
                     &prop.name,
                     &prop.wire_name,

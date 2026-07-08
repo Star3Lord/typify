@@ -496,6 +496,118 @@ fn deep_patches_all_option_structs_emits_inner_struct_only() {
     );
 }
 
+// A schema whose struct carries one field that `rename_all = "camelCase"`
+// covers (`someField`) and one it cannot cover (`RootRQ` — an explicit
+// per-field rename survives elision).
+fn renamed_fields_schema() -> serde_json::Value {
+    json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "Envelope",
+        "type": "object",
+        "properties": {
+            "RootRQ": { "type": "string" },
+            "someField": { "type": "string" }
+        }
+    })
+}
+
+#[test]
+fn patch_derive_mirrors_field_renames_into_companion() {
+    // With a `Patch` derive on structs, an explicit per-field
+    // `#[serde(rename = ...)]` must be repeated as
+    // `#[patch(attribute(serde(rename = ...)))]`: struct_patch does not
+    // carry field serde attributes over to the `{Type}Patch` companion,
+    // so an unmirrored rename makes the companion silently address a
+    // different wire key.
+    let out = generate(renamed_fields_schema(), |s| {
+        s.with_struct_rename_all("camelCase")
+            .with_unconditional_derive_for("Patch", TypeKindFilter::STRUCTS);
+    });
+    assert_contains(
+        &out,
+        "# [patch (attribute (serde (rename = \"RootRQ\")))] pub root_rq",
+    );
+    // `someField` is covered by the struct-level rename_all (which the
+    // companion inherits through its own configured rename_all); no
+    // per-field rename, hence no mirror.
+    assert_not_contains(&out, "# [patch (attribute (serde (rename = \"someField\")))]");
+}
+
+#[test]
+fn no_patch_derive_no_naming_mirror() {
+    // Without a `Patch` derive there is no companion; the mirror would
+    // be a compile error (bare `#[patch(...)]` needs the derive).
+    let out = generate(renamed_fields_schema(), |s| {
+        s.with_struct_rename_all("camelCase");
+    });
+    assert_contains(&out, "# [serde (rename = \"RootRQ\"");
+    assert_not_contains(&out, "# [patch (attribute (serde");
+}
+
+// A plain string enum plus a struct holding it, for the open-enum knob.
+fn string_enum_schema() -> serde_json::Value {
+    json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {
+            "Kind": { "type": "string", "enum": ["yes", "no"] },
+            "Holder": {
+                "type": "object",
+                "properties": { "kind": { "$ref": "#/definitions/Kind" } }
+            }
+        }
+    })
+}
+
+#[test]
+fn open_string_enums_add_untagged_catch_all() {
+    let out = generate(string_enum_schema(), |s| {
+        s.with_open_string_enums("Other");
+    });
+    // The catch-all variant, untagged so any undocumented wire string
+    // deserializes into it and re-serializes verbatim.
+    assert_contains(&out, "# [serde (untagged)] Other (:: std :: string :: String)");
+    // The conversion ladder gains catch-all arms: Display writes the raw
+    // string, FromStr is irrefutable.
+    assert_contains(&out, "Self :: Other (value) => f . write_str (value . as_str ())");
+    assert_contains(&out, "_ => Ok (Self :: Other (value . to_string ()))");
+    // Copy is dropped (the catch-all owns a String); Hash/Ord remain.
+    let kind_derive = nws(&out)
+        .split("pub enum Kind")
+        .next()
+        .map(str::to_owned)
+        .expect("Kind decl present");
+    let last_derive = kind_derive.rsplit("# [derive (").next().unwrap().to_owned();
+    assert!(
+        !last_derive.starts_with("Copy") && !last_derive.contains(", Copy"),
+        "opened enum must not derive Copy: {last_derive}"
+    );
+    assert!(last_derive.contains("Hash"), "opened enum keeps Hash: {last_derive}");
+}
+
+#[test]
+fn open_string_enums_off_by_default() {
+    let out = generate(string_enum_schema(), |_| {});
+    assert_not_contains(&out, "# [serde (untagged)] Other");
+    assert_contains(&out, "_ => Err (\"invalid value\" . into ())");
+}
+
+#[test]
+fn open_string_enums_skip_colliding_variant_names() {
+    // An enum already declaring the configured catch-all name stays
+    // closed rather than colliding.
+    let schema = json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {
+            "Kind": { "type": "string", "enum": ["yes", "other"] }
+        }
+    });
+    let out = generate(schema, |s| {
+        s.with_open_string_enums("Other");
+    });
+    assert_not_contains(&out, "# [serde (untagged)]");
+    assert_contains(&out, "_ => Err (\"invalid value\" . into ())");
+}
+
 #[test]
 fn deep_patch_filter_overrides_bulk_off() {
     // Bulk policy is Off, but a closure flips ON for a single field.

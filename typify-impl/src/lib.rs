@@ -352,6 +352,11 @@ pub struct TypeSpaceSettings {
     /// value gets an auto-generated `impl Default` that picks the first
     /// Simple (unit) variant. See [`Self::with_enum_first_variant_default`].
     enum_first_variant_default: bool,
+    /// When set, every all-simple-variant (string) enum gains a catch-all
+    /// `#[serde(untagged)] <Name>(String)` variant so undocumented wire
+    /// values round-trip instead of failing deserialization. See
+    /// [`Self::with_open_string_enums`].
+    open_string_enums: Option<String>,
     struct_builder: bool,
 
     unknown_crates: UnknownPolicy,
@@ -1422,6 +1427,41 @@ impl TypeSpaceSettings {
     /// enabled.
     pub(crate) fn enum_first_variant_default(&self) -> bool {
         self.enum_first_variant_default
+    }
+
+    /// Give every all-simple-variant (string) enum a trailing catch-all
+    /// variant — `#[serde(untagged)] <variant_name>(String)` — turning the
+    /// spec's closed value list into an *open* enum: any wire value outside
+    /// the documented set deserializes into the catch-all, carrying the
+    /// raw string, and re-serializes verbatim instead of failing. Use this
+    /// when the spec's enums are known to lag the live wire (values appear
+    /// in production before they appear in documentation).
+    ///
+    /// The catch-all also joins the `Display` / `FromStr` conversion
+    /// ladder: `Display` writes the carried string, and `FromStr` becomes
+    /// irrefutable (unknown input parses into the catch-all).
+    ///
+    /// Scope and safety valves:
+    ///
+    /// - Only *externally tagged* enums whose variants are all Simple
+    ///   (i.e. plain string enums) are opened; tagged/tuple/struct enums
+    ///   are left closed.
+    /// - An enum that already declares a variant named `variant_name`
+    ///   stays closed — opening it would collide.
+    /// - Opened enums lose `Copy` (the catch-all owns a `String`); the
+    ///   remaining historical derives (`PartialOrd`, `Ord`, `Eq`, `Hash`)
+    ///   are kept.
+    /// - Schema-level `default:` values and the
+    ///   [`Self::with_enum_first_variant_default`] auto-`Default` are
+    ///   unaffected: the catch-all is never the default.
+    pub fn with_open_string_enums<S: ToString>(&mut self, variant_name: S) -> &mut Self {
+        self.open_string_enums = Some(variant_name.to_string());
+        self
+    }
+
+    /// Returns the configured open-enum catch-all variant name, if any.
+    pub(crate) fn open_string_enums(&self) -> Option<&str> {
+        self.open_string_enums.as_deref()
     }
 }
 
