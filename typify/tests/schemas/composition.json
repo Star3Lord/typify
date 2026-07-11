@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "validate allOf handling, in particular the Compose strategy and its fallbacks",
+  "definitions": {
+    "base-thing": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "other-base": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "derived-thing": {
+      "description": "the classic single-inheritance idiom",
+      "allOf": [
+        {
+          "$ref": "#/definitions/base-thing"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "extra": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "extra"
+          ]
+        }
+      ]
+    },
+    "sibling-thing": {
+      "description": "sibling properties alongside the allOf",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/base-thing"
+        }
+      ]
+    },
+    "multi-base-thing": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/base-thing"
+        },
+        {
+          "$ref": "#/definitions/other-base"
+        }
+      ]
+    },
+    "grandchild-thing": {
+      "description": "composition through a composed base",
+      "allOf": [
+        {
+          "$ref": "#/definitions/derived-thing"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "grandchild": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "colliding-thing": {
+      "description": "the inline property collides with a base property, so this cannot compose and merges instead",
+      "allOf": [
+        {
+          "$ref": "#/definitions/base-thing"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "other": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "scalar-thing": {
+      "description": "non-object subschemas never compose",
+      "allOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "string",
+          "maxLength": 5
+        }
+      ]
+    }
+  }
+}

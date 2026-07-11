@@ -4,10 +4,12 @@ use std::collections::BTreeSet;
 
 use crate::merge::{merge_all, try_merge_with_subschemas};
 use crate::type_entry::{
-    EnumTagType, TypeEntry, TypeEntryDetails, TypeEntryEnum, TypeEntryNewtype, TypeEntryStruct,
-    Variant, VariantDetails,
+    EnumTagType, StructProperty, StructPropertyRename, StructPropertyState, TypeEntry,
+    TypeEntryDetails, TypeEntryEnum, TypeEntryNewtype, TypeEntryStruct, Variant, VariantDetails,
 };
-use crate::util::{all_mutually_exclusive, ref_key, ReorderedInstanceType, StringValidator};
+use crate::util::{
+    all_mutually_exclusive, ref_key, sanitize, Case, ReorderedInstanceType, StringValidator,
+};
 use log::{debug, info};
 use schemars::schema::{
     ArrayValidation, InstanceType, Metadata, ObjectValidation, Schema, SchemaObject, SingleOrVec,
@@ -16,7 +18,7 @@ use schemars::schema::{
 
 use crate::util::get_type_name;
 
-use crate::{Error, Name, Result, TypeSpace, TypeSpaceImpl};
+use crate::{AllOfStrategy, Error, Name, RefKey, Result, TypeSpace, TypeSpaceImpl};
 
 pub const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 
@@ -548,6 +550,51 @@ impl TypeSpace {
                 subschemas: subschemas @ Some(_),
                 ..
             } => {
+                // Under the Compose strategy, an object with properties
+                // alongside an allOf--the common single-inheritance idiom
+                //
+                //   {
+                //     "type": "object",
+                //     "properties": { ... },
+                //     "allOf": [ { "$ref": ".../BaseType" } ]
+                //   }
+                //
+                // composes exactly like a pure allOf whose inline object
+                // carries the sibling properties.
+                if let (
+                    AllOfStrategy::Compose,
+                    Some(SubschemaValidation {
+                        all_of: Some(all_of),
+                        any_of: None,
+                        one_of: None,
+                        not: None,
+                        if_schema: None,
+                        then_schema: None,
+                        else_schema: None,
+                    }),
+                ) = (self.settings.all_of_strategy, subschemas.as_deref())
+                {
+                    let outer = SchemaObject {
+                        subschemas: None,
+                        metadata: None,
+                        ..schema.clone()
+                    };
+                    if is_plain_object(&outer) {
+                        let mut combined = all_of.clone();
+                        if outer.object.is_some() {
+                            combined.push(Schema::Object(outer));
+                        }
+                        if let Some(composed) = self.convert_all_of_compose(
+                            type_name.clone(),
+                            original_schema,
+                            metadata,
+                            &combined,
+                        )? {
+                            return Ok(composed);
+                        }
+                    }
+                }
+
                 let without_subschemas = SchemaObject {
                     subschemas: None,
                     metadata: None,
@@ -1384,6 +1431,17 @@ impl TypeSpace {
             return Ok((ty, metadata));
         }
 
+        if let AllOfStrategy::Compose = self.settings.all_of_strategy {
+            if let Some(composed) = self.convert_all_of_compose(
+                type_name.clone(),
+                original_schema,
+                metadata,
+                subschemas,
+            )? {
+                return Ok(composed);
+            }
+        }
+
         // In the general case, we merge all schemas in the array. The merged
         // schema will reflect all definitions and constraints, the
         // intersection of all schemas. For example, it will have the union of
@@ -1452,6 +1510,189 @@ impl TypeSpace {
                 self.convert_schema_object(type_name, original_schema, &merged_schema)?;
             Ok((type_entry, &None))
         }
+    }
+
+    /// Interpret an `allOf` as single-inheritance composition: each `$ref`
+    /// subschema becomes a `#[serde(flatten)]` member of the generated
+    /// struct--retaining the association with the named base type--and
+    /// inline object subschemas contribute ordinary properties. Returns
+    /// `Ok(None)`, deferring to schema merging, for any construction that
+    /// doesn't provably fit that idiom.
+    fn convert_all_of_compose<'a>(
+        &mut self,
+        type_name: Name,
+        original_schema: &'a Schema,
+        metadata: &'a Option<Box<Metadata>>,
+        subschemas: &[Schema],
+    ) -> Result<Option<(TypeEntry, &'a Option<Box<Metadata>>)>> {
+        // Partition subschemas into named references and inline objects;
+        // anything else does not compose.
+        let mut base_refs = Vec::new();
+        let mut inline_subschemas = Vec::new();
+        for subschema in subschemas {
+            match subschema {
+                Schema::Object(SchemaObject {
+                    reference: Some(reference),
+                    ..
+                }) => {
+                    let RefKey::Def(ref_name) = ref_key(reference) else {
+                        return Ok(None);
+                    };
+                    base_refs.push((ref_name, subschema));
+                }
+                Schema::Object(obj) if is_plain_object(obj) => {
+                    inline_subschemas.push(subschema.clone());
+                }
+                _ => return Ok(None),
+            }
+        }
+
+        // Without a referenced base type, composition degenerates to
+        // merging.
+        if base_refs.is_empty() {
+            return Ok(None);
+        }
+
+        // Flattening is only valid if no property name appears in more than
+        // one subschema (duplicate keys in the serialized output); enumerate
+        // the wire properties of each base to check. Bases whose properties
+        // cannot be fully enumerated do not compose--the merge path is
+        // always correct.
+        let mut wire_names = BTreeSet::new();
+        for (_, subschema) in &base_refs {
+            if !self.enumerable_properties(subschema, &mut wire_names, &mut BTreeSet::new()) {
+                return Ok(None);
+            }
+        }
+
+        // Each base type becomes a flattened member named for the
+        // referenced definition.
+        let mut properties = base_refs
+            .iter()
+            .map(|(ref_name, subschema)| {
+                let (type_id, _) =
+                    self.id_for_schema(Name::Required(ref_name.clone()), subschema)?;
+                Ok(StructProperty {
+                    name: sanitize(ref_name, Case::Snake),
+                    rename: StructPropertyRename::Flatten,
+                    state: StructPropertyState::Required,
+                    description: None,
+                    type_id,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // The inline subschemas--merged so that, for example, `required`
+        // lists combine--contribute ordinary properties.
+        if !inline_subschemas.is_empty() {
+            let Schema::Object(merged) = merge_all(&inline_subschemas, &self.definitions) else {
+                // Unsatisfiable; let the merge path produce its usual result.
+                return Ok(None);
+            };
+            if let Some(validation) = merged.object.as_deref() {
+                if !validation
+                    .properties
+                    .keys()
+                    .all(|wire_name| wire_names.insert(wire_name.clone()))
+                {
+                    // An inline property collides with a base property.
+                    return Ok(None);
+                }
+                let sub_type_name = get_type_name(&type_name, metadata);
+                let (inline_properties, _) = self.struct_members(sub_type_name, validation)?;
+                properties.extend(inline_properties);
+            }
+        }
+
+        // Composed structs never deny unknown fields: `#[serde(flatten)]`
+        // is incompatible with `#[serde(deny_unknown_fields)]`.
+        Ok(Some((
+            TypeEntryStruct::from_metadata(
+                self,
+                type_name,
+                metadata,
+                properties,
+                false,
+                original_schema.clone(),
+            ),
+            metadata,
+        )))
+    }
+
+    /// Accumulate the wire property names reachable from a schema through
+    /// references and `allOf` constructions, returning false if the
+    /// schema's properties cannot be fully enumerated (e.g. for subschemas
+    /// more complex than plain objects).
+    fn enumerable_properties(
+        &self,
+        schema: &Schema,
+        wire_names: &mut BTreeSet<String>,
+        visited: &mut BTreeSet<RefKey>,
+    ) -> bool {
+        let Schema::Object(obj) = schema else {
+            return false;
+        };
+
+        if let Some(reference) = &obj.reference {
+            // A reference with constraint siblings is more than a plain
+            // reference; don't try to enumerate it.
+            if obj.subschemas.is_some() || obj.object.is_some() {
+                return false;
+            }
+            let key = ref_key(reference);
+            if !visited.insert(key.clone()) {
+                // A reference cycle; properties were already accumulated.
+                return true;
+            }
+            let Some(definition) = self.definitions.get(&key) else {
+                return false;
+            };
+            return self.enumerable_properties(definition, wire_names, visited);
+        }
+
+        match &obj.subschemas {
+            None if is_plain_object(obj) => {}
+            // An object composed of further subschemas can be enumerated if
+            // it is exclusively an allOf of enumerable subschemas.
+            Some(subschemas) => {
+                let SubschemaValidation {
+                    all_of: Some(all_of),
+                    any_of: None,
+                    one_of: None,
+                    not: None,
+                    if_schema: None,
+                    then_schema: None,
+                    else_schema: None,
+                } = subschemas.as_ref()
+                else {
+                    return false;
+                };
+                let plain_self = SchemaObject {
+                    subschemas: None,
+                    ..obj.clone()
+                };
+                if !is_plain_object(&plain_self) {
+                    return false;
+                }
+                if !all_of
+                    .iter()
+                    .all(|subschema| self.enumerable_properties(subschema, wire_names, visited))
+                {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+
+        if let Some(validation) = obj.object.as_deref() {
+            for wire_name in validation.properties.keys() {
+                if !wire_names.insert(wire_name.clone()) {
+                    // The same property appears in more than one subschema.
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn convert_any_of<'a>(
@@ -2087,6 +2328,35 @@ impl TypeSpace {
             _ => None,
         }
     }
+}
+
+/// An inline object schema: one without references or subschemas, whose
+/// instance type is absent or object, and which carries no constraints
+/// other than object validation. Anything else does not (provably)
+/// compose by flattening.
+fn is_plain_object(obj: &SchemaObject) -> bool {
+    let type_is_object = match &obj.instance_type {
+        None => true,
+        Some(SingleOrVec::Single(single)) => **single == InstanceType::Object,
+        Some(SingleOrVec::Vec(types)) => types
+            .iter()
+            .all(|instance_type| *instance_type == InstanceType::Object),
+    };
+    type_is_object
+        && matches!(
+            obj,
+            SchemaObject {
+                reference: None,
+                subschemas: None,
+                enum_values: None,
+                const_value: None,
+                format: None,
+                number: None,
+                string: None,
+                array: None,
+                ..
+            }
+        )
 }
 
 #[cfg(test)]

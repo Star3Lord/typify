@@ -7,7 +7,7 @@ use glob::glob;
 use quote::quote;
 use schemars::schema::RootSchema;
 use serde_json::json;
-use typify::{OptionalProperties, TypeSpace, TypeSpacePatch, TypeSpaceSettings};
+use typify::{AllOfStrategy, OptionalProperties, TypeSpace, TypeSpacePatch, TypeSpaceSettings};
 use typify_impl::TypeSpaceImpl;
 
 #[test]
@@ -35,6 +35,21 @@ fn test_custom_map() {
     .unwrap();
 
     trybuild::TestCases::new().pass("tests/schemas/maps_custom.rs");
+}
+
+/// Ensure that the `Compose` allOf strategy embeds referenced base types as
+/// flattened members, and that constructions that don't fit the
+/// single-inheritance idiom fall back to merging.
+#[test]
+fn test_all_of_compose() {
+    validate_schema(
+        "tests/schemas/composition.json".into(),
+        "tests/schemas/composition-compose.rs".into(),
+        TypeSpaceSettings::default().with_all_of_strategy(AllOfStrategy::Compose),
+    )
+    .unwrap();
+
+    trybuild::TestCases::new().pass("tests/schemas/composition-compose.rs");
 }
 
 /// Ensure that the `Explicit` optional-properties policy represents every

@@ -304,6 +304,7 @@ pub struct TypeSpaceSettings {
     extra_attrs: Vec<String>,
     struct_builder: bool,
     optional_properties: OptionalProperties,
+    all_of_strategy: AllOfStrategy,
 
     unknown_crates: UnknownPolicy,
     crates: BTreeMap<String, CrateSpec>,
@@ -337,6 +338,27 @@ pub enum OptionalProperties {
     /// [`OptionalProperties::Collapsed`] both directions conflate the two.
     /// Schema-specified default values do not affect the representation.
     Explicit,
+}
+
+/// Strategy for interpreting `allOf` constructions.
+#[derive(Default, Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize)]
+pub enum AllOfStrategy {
+    /// Merge all subschemas into a single schema; the generated type has
+    /// the union of the properties of all subschemas (the default).
+    #[default]
+    Merge,
+    /// Where an `allOf` matches the single-inheritance idiom--subschemas
+    /// that are references to named types plus (at most) inline object
+    /// schemas--generate a struct that embeds each referenced type as a
+    /// `#[serde(flatten)]` member rather than duplicating its properties.
+    ///
+    /// Constructions that do not provably fit the idiom--non-object
+    /// subschemas, property names shared between subschemas, references
+    /// whose properties cannot be enumerated--fall back to
+    /// [`AllOfStrategy::Merge`]. Note that composed structs never deny
+    /// unknown fields, as `#[serde(flatten)]` is incompatible with
+    /// `#[serde(deny_unknown_fields)]`.
+    Compose,
 }
 
 /// Policy to apply to external types described by schema extensions whose
@@ -468,6 +490,13 @@ impl TypeSpaceSettings {
     /// [`OptionalProperties::Collapsed`].
     pub fn with_optional_properties(&mut self, policy: OptionalProperties) -> &mut Self {
         self.optional_properties = policy;
+        self
+    }
+
+    /// Set the strategy for interpreting `allOf` constructions; see
+    /// [`AllOfStrategy`]. The default is [`AllOfStrategy::Merge`].
+    pub fn with_all_of_strategy(&mut self, strategy: AllOfStrategy) -> &mut Self {
+        self.all_of_strategy = strategy;
         self
     }
 
