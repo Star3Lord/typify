@@ -1,4 +1,4 @@
-cargo command to generate Rust code from a JSON Schema
+cargo command to generate Rust code from a JSON Schema or OpenAPI document
 
 Usage: cargo typify [OPTIONS] <INPUT>
 

@@ -120,6 +120,13 @@
 //! );
 //! ```
 //!
+//! # OpenAPI documents
+//!
+//! Types may also be generated from the component schemas of an OpenAPI
+//! document (versions 3.0.x, 3.1.x, and 3.2.x). The macro detects OpenAPI
+//! documents automatically; the builder interface has a dedicated method,
+//! [`TypeSpace::add_openapi_document`].
+//!
 //! # Macro vs. `build.rs`
 //!
 //! While using the [`import_types!`] macro is quite a bit simpler, you can
