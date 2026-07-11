@@ -182,6 +182,39 @@ fn test_openapi_document() {
 }
 
 #[test]
+fn test_ergonomic_flags() {
+    let input = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../typify/tests/schemas/open-enums.json"
+    );
+
+    let temp = TempDir::new().unwrap();
+    let output_file = temp.path().join("output.rs");
+
+    assert_cmd::cargo::cargo_bin_cmd!()
+        .args([
+            "typify",
+            input,
+            "--no-builder",
+            "--optional-properties",
+            "explicit",
+            "--all-of-strategy",
+            "compose",
+            "--open-enum-variant",
+            "Other",
+            "--no-schema-in-docs",
+            "--output",
+            output_file.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let actual = std::fs::read_to_string(output_file).unwrap();
+
+    assert_contents("tests/outputs/ergonomic.rs", &actual);
+}
+
+#[test]
 fn test_help() {
     let output = assert_cmd::cargo::cargo_bin_cmd!()
         .args(["typify", "--help"])

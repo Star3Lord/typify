@@ -13,7 +13,8 @@ use serde_tokenstream::{ParseWrapper, TokenStreamWrapper};
 use syn::LitStr;
 use token_utils::TypeAndImpls;
 use typify_impl::{
-    CrateVers, MapType, TypeSpace, TypeSpacePatch, TypeSpaceSettings, UnknownPolicy,
+    AllOfStrategy, CrateVers, MapType, OptionalProperties, TypeSpace, TypeSpacePatch,
+    TypeSpaceSettings, UnknownPolicy,
 };
 
 mod token_utils;
@@ -41,6 +42,22 @@ mod token_utils;
 /// - `struct_builder`: optional boolean; (if true) generates a `::builder()`
 ///   method for each generated struct that can be used to specify each
 ///   property and construct the struct
+///
+/// - `optional_properties`: optional policy for non-required object
+///   properties: `Collapsed` (the default) or `Explicit` (every
+///   non-required property is represented as an `Option<T>`)
+///
+/// - `all_of_strategy`: optional strategy for `allOf` constructions:
+///   `Merge` (the default) or `Compose` (single-inheritance `allOf`
+///   constructions embed referenced base types as flattened members)
+///
+/// - `open_enum_variant`: optional string; gives every plain string enum a
+///   catch-all variant of this name that losslessly round-trips values
+///   outside the documented set
+///
+/// - `schema_in_docs`: optional boolean; if false, generated doc comments
+///   contain only the schema's description rather than embedding the whole
+///   JSON schema
 ///
 /// - `unknown_crates`: optional policy regarding the handling of schemas that
 ///   contain the `x-rust-type` extension whose crates are not explicitly named
@@ -84,6 +101,14 @@ struct MacroSettings {
     attrs: Vec<TokenStreamWrapper>,
     #[serde(default)]
     struct_builder: bool,
+    #[serde(default)]
+    optional_properties: OptionalProperties,
+    #[serde(default)]
+    all_of_strategy: AllOfStrategy,
+    #[serde(default)]
+    open_enum_variant: Option<String>,
+    #[serde(default)]
+    schema_in_docs: Option<bool>,
 
     #[serde(default)]
     unknown_crates: UnknownPolicy,
@@ -201,6 +226,10 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
             replace,
             patch,
             struct_builder,
+            optional_properties,
+            all_of_strategy,
+            open_enum_variant,
+            schema_in_docs,
             convert,
             unknown_crates,
             crates,
@@ -215,6 +244,14 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
             settings.with_attr(attr.to_token_stream().to_string());
         });
         settings.with_struct_builder(struct_builder);
+        settings.with_optional_properties(optional_properties);
+        settings.with_all_of_strategy(all_of_strategy);
+        if let Some(open_enum_variant) = open_enum_variant {
+            settings.with_open_enum_variant(open_enum_variant);
+        }
+        if let Some(schema_in_docs) = schema_in_docs {
+            settings.with_schema_in_docs(schema_in_docs);
+        }
 
         patch.into_iter().for_each(|(type_name, patch)| {
             settings.with_patch(type_name.to_token_stream(), &patch.into());

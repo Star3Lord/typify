@@ -35,6 +35,22 @@ Options:
           
           [possible values: generate, allow, deny]
 
+      --optional-properties <OPTIONAL_PROPERTIES>
+          Specify the representation of non-required object properties: "explicit" represents every one as an Option<T>
+          
+          [possible values: collapsed, explicit]
+
+      --all-of-strategy <ALL_OF_STRATEGY>
+          Specify the interpretation of allOf constructions: "compose" embeds referenced base types as flattened members
+          
+          [possible values: merge, compose]
+
+      --open-enum-variant <name>
+          Give every plain string enum a catch-all variant of this name that losslessly round-trips values outside the documented set
+
+      --no-schema-in-docs
+          Limit generated doc comments to the schema's description rather than embedding the whole JSON schema
+
   -h, --help
           Print help (see a summary with '-h')
 

@@ -9,7 +9,9 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Args};
 use color_eyre::eyre::{Context, Result};
-use typify::{CrateVers, TypeSpace, TypeSpaceSettings, UnknownPolicy};
+use typify::{
+    AllOfStrategy, CrateVers, OptionalProperties, TypeSpace, TypeSpaceSettings, UnknownPolicy,
+};
 
 /// A CLI for the `typify` crate that converts JSON Schema files to Rust code.
 #[derive(Args)]
@@ -63,6 +65,32 @@ pub struct CliArgs {
         value_parser = ["generate", "allow", "deny"]
     )]
     unknown_crates: Option<String>,
+
+    /// Specify the representation of non-required object properties:
+    /// "explicit" represents every one as an Option<T>.
+    #[arg(
+        long = "optional-properties",
+        value_parser = ["collapsed", "explicit"]
+    )]
+    optional_properties: Option<String>,
+
+    /// Specify the interpretation of allOf constructions: "compose" embeds
+    /// referenced base types as flattened members.
+    #[arg(
+        long = "all-of-strategy",
+        value_parser = ["merge", "compose"]
+    )]
+    all_of_strategy: Option<String>,
+
+    /// Give every plain string enum a catch-all variant of this name that
+    /// losslessly round-trips values outside the documented set.
+    #[arg(long = "open-enum-variant", value_name = "name")]
+    open_enum_variant: Option<String>,
+
+    /// Limit generated doc comments to the schema's description rather than
+    /// embedding the whole JSON schema.
+    #[arg(long = "no-schema-in-docs", default_value = "false")]
+    no_schema_in_docs: bool,
 }
 
 impl CliArgs {
@@ -180,6 +208,32 @@ pub fn convert(args: &CliArgs) -> Result<String> {
         settings.with_unknown_crates(unknown_crates);
     }
 
+    if let Some(optional_properties) = &args.optional_properties {
+        let policy = match optional_properties.as_str() {
+            "collapsed" => OptionalProperties::Collapsed,
+            "explicit" => OptionalProperties::Explicit,
+            _ => unreachable!(),
+        };
+        settings.with_optional_properties(policy);
+    }
+
+    if let Some(all_of_strategy) = &args.all_of_strategy {
+        let strategy = match all_of_strategy.as_str() {
+            "merge" => AllOfStrategy::Merge,
+            "compose" => AllOfStrategy::Compose,
+            _ => unreachable!(),
+        };
+        settings.with_all_of_strategy(strategy);
+    }
+
+    if let Some(open_enum_variant) = &args.open_enum_variant {
+        settings.with_open_enum_variant(open_enum_variant);
+    }
+
+    if args.no_schema_in_docs {
+        settings.with_schema_in_docs(false);
+    }
+
     let mut type_space = TypeSpace::new(&settings);
     // An `openapi` member indicates an OpenAPI document; anything else is
     // treated as a JSON Schema.
@@ -224,6 +278,10 @@ mod tests {
             crates: vec![],
             map_type: None,
             unknown_crates: Default::default(),
+            optional_properties: Default::default(),
+            all_of_strategy: Default::default(),
+            open_enum_variant: Default::default(),
+            no_schema_in_docs: Default::default(),
         };
 
         assert_eq!(args.output_path(), None);
@@ -241,6 +299,10 @@ mod tests {
             crates: vec![],
             map_type: None,
             unknown_crates: Default::default(),
+            optional_properties: Default::default(),
+            all_of_strategy: Default::default(),
+            open_enum_variant: Default::default(),
+            no_schema_in_docs: Default::default(),
         };
 
         assert_eq!(args.output_path(), Some(PathBuf::from("some_file.rs")));
@@ -258,6 +320,10 @@ mod tests {
             crates: vec![],
             map_type: None,
             unknown_crates: Default::default(),
+            optional_properties: Default::default(),
+            all_of_strategy: Default::default(),
+            open_enum_variant: Default::default(),
+            no_schema_in_docs: Default::default(),
         };
 
         assert_eq!(args.output_path(), Some(PathBuf::from("input.rs")));
@@ -275,6 +341,10 @@ mod tests {
             crates: vec![],
             map_type: Some("::std::collections::BTreeMap".to_string()),
             unknown_crates: Default::default(),
+            optional_properties: Default::default(),
+            all_of_strategy: Default::default(),
+            open_enum_variant: Default::default(),
+            no_schema_in_docs: Default::default(),
         };
 
         assert_eq!(
@@ -295,6 +365,10 @@ mod tests {
             crates: vec![],
             map_type: None,
             unknown_crates: Default::default(),
+            optional_properties: Default::default(),
+            all_of_strategy: Default::default(),
+            open_enum_variant: Default::default(),
+            no_schema_in_docs: Default::default(),
         };
 
         assert!(args.use_builder());
@@ -312,6 +386,10 @@ mod tests {
             crates: vec![],
             map_type: None,
             unknown_crates: Default::default(),
+            optional_properties: Default::default(),
+            all_of_strategy: Default::default(),
+            open_enum_variant: Default::default(),
+            no_schema_in_docs: Default::default(),
         };
 
         assert!(!args.use_builder());
@@ -329,6 +407,10 @@ mod tests {
             crates: vec![],
             map_type: None,
             unknown_crates: Default::default(),
+            optional_properties: Default::default(),
+            all_of_strategy: Default::default(),
+            open_enum_variant: Default::default(),
+            no_schema_in_docs: Default::default(),
         };
 
         assert!(args.use_builder());
