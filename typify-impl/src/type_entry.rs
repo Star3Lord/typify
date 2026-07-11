@@ -598,7 +598,10 @@ impl TypeEntry {
             enum_details.finalize(type_space);
         }
 
-        self.check_defaults(type_space)
+        let mut defaults = std::mem::take(&mut type_space.defaults);
+        let result = self.collect_defaults(type_space, &mut defaults);
+        type_space.defaults = defaults;
+        result
     }
 
     pub(crate) fn name(&self) -> Option<&String> {

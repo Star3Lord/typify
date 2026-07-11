@@ -1,6 +1,6 @@
 // Copyright 2025 Oxide Computer Company
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -60,7 +60,13 @@ impl From<&DefaultImpl> for TokenStream {
 }
 
 impl TypeEntry {
-    pub(crate) fn check_defaults(&self, type_space: &mut TypeSpace) -> Result<()> {
+    /// Validate this type's default values, accumulating the shared default
+    /// functions the type's generated code requires.
+    pub(crate) fn collect_defaults(
+        &self,
+        type_space: &TypeSpace,
+        defaults: &mut BTreeSet<DefaultImpl>,
+    ) -> Result<()> {
         // Check the "whole-type" default.
         match &self.details {
             TypeEntryDetails::Enum(TypeEntryEnum {
@@ -78,7 +84,7 @@ impl TypeEntry {
                 if let DefaultKind::Generic(default_fn) =
                     self.validate_value(type_space, default)?
                 {
-                    type_space.defaults.insert(default_fn);
+                    defaults.insert(default_fn);
                 }
             }
 
@@ -89,17 +95,17 @@ impl TypeEntry {
         // enum variants.
         match &self.details {
             TypeEntryDetails::Struct(TypeEntryStruct { properties, .. }) => {
-                properties
-                    .iter()
-                    .try_for_each(|prop| Self::check_property_defaults(prop, type_space))?;
+                properties.iter().try_for_each(|prop| {
+                    Self::collect_property_defaults(prop, type_space, defaults)
+                })?;
             }
 
             TypeEntryDetails::Enum(TypeEntryEnum { variants, .. }) => {
                 variants.iter().try_for_each(|variant| {
                     if let VariantDetails::Struct(properties) = &variant.details {
-                        properties
-                            .iter()
-                            .try_for_each(|prop| Self::check_property_defaults(prop, type_space))
+                        properties.iter().try_for_each(|prop| {
+                            Self::collect_property_defaults(prop, type_space, defaults)
+                        })
                     } else {
                         Ok(())
                     }
@@ -112,9 +118,10 @@ impl TypeEntry {
         Ok(())
     }
 
-    fn check_property_defaults(
+    fn collect_property_defaults(
         property: &StructProperty,
-        type_space: &mut TypeSpace,
+        type_space: &TypeSpace,
+        defaults: &mut BTreeSet<DefaultImpl>,
     ) -> Result<()> {
         if let StructProperty {
             state: StructPropertyState::Default(WrappedValue(prop_default)),
@@ -126,7 +133,7 @@ impl TypeEntry {
             if let DefaultKind::Generic(default_fn) =
                 type_entry.validate_value(type_space, prop_default)?
             {
-                type_space.defaults.insert(default_fn);
+                defaults.insert(default_fn);
             }
         }
         Ok(())

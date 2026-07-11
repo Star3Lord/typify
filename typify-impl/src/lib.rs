@@ -76,6 +76,7 @@ fn show_type_name(type_name: Option<&str>) -> &str {
 pub struct Type<'a> {
     type_space: &'a TypeSpace,
     type_entry: &'a TypeEntry,
+    type_id: TypeId,
 }
 
 #[allow(missing_docs)]
@@ -970,6 +971,7 @@ impl TypeSpace {
         Ok(Type {
             type_space: self,
             type_entry,
+            type_id: type_id.clone(),
         })
     }
 
@@ -996,14 +998,35 @@ impl TypeSpace {
     /// Iterate over all types including those defined in this [TypeSpace] and
     /// those referred to by those types.
     pub fn iter_types(&self) -> impl Iterator<Item = Type<'_>> {
-        self.id_to_entry.values().map(move |type_entry| Type {
-            type_space: self,
-            type_entry,
-        })
+        self.id_to_entry
+            .iter()
+            .map(move |(type_id, type_entry)| Type {
+                type_space: self,
+                type_entry,
+                type_id: type_id.clone(),
+            })
     }
 
     /// All code for processed types.
     pub fn to_stream(&self) -> TokenStream {
+        let type_ids = self.id_to_entry.keys().cloned().collect::<Vec<_>>();
+        self.to_stream_for(&type_ids)
+            .expect("type ids from the map are valid")
+    }
+
+    /// Code for the given subset of types, suitable for placement in its own
+    /// module: in addition to the definition of each type, the stream
+    /// includes the shared items its code refers to by module-relative paths
+    /// (the conversion error type and default functions). Types not in the
+    /// subset are referred to by bare (or `type_mod`-prefixed) names;
+    /// callers assembling multiple modules are responsible for making those
+    /// names resolve, e.g. with `use` items.
+    ///
+    /// Use this, together with [`TypeSpace::iter_definitions`], to organize
+    /// generated types into modules of your choosing. Types omitted from
+    /// every subset are simply not generated; duplicated type ids are
+    /// generated once.
+    pub fn to_stream_for(&self, type_ids: &[TypeId]) -> Result<TokenStream> {
         let mut output = OutputSpace::default();
 
         // Add the error type we use for conversions; it's fine if this is
@@ -1044,17 +1067,41 @@ impl TypeSpace {
             },
         );
 
-        // Add all types.
-        self.id_to_entry
-            .values()
-            .for_each(|type_entry| type_entry.output(self, &mut output));
-
-        // Add all shared default functions.
-        self.defaults
+        // Add the given types along with the shared default functions that
+        // exactly those types require.
+        let mut defaults = BTreeSet::new();
+        for type_id in type_ids.iter().collect::<BTreeSet<_>>() {
+            let type_entry = self.id_to_entry.get(type_id).ok_or(Error::InvalidTypeId)?;
+            type_entry.output(self, &mut output);
+            type_entry
+                .collect_defaults(self, &mut defaults)
+                .expect("defaults were validated when the type was added");
+        }
+        defaults
             .iter()
             .for_each(|x| output.add_item(output::OutputSpaceMod::Defaults, "", x.into()));
 
-        output.into_stream()
+        Ok(output.into_stream())
+    }
+
+    /// Iterate over the types generated for named definitions (`$defs` or
+    /// `definitions` values, or the component schemas of an OpenAPI
+    /// document), pairing each definition name with its type.
+    pub fn iter_definitions(&self) -> impl Iterator<Item = (&str, Type<'_>)> {
+        self.ref_to_id.iter().filter_map(|(ref_key, type_id)| {
+            let RefKey::Def(def_name) = ref_key else {
+                return None;
+            };
+            let type_entry = self.id_to_entry.get(type_id)?;
+            Some((
+                def_name.as_str(),
+                Type {
+                    type_space: self,
+                    type_entry,
+                    type_id: type_id.clone(),
+                },
+            ))
+        })
     }
 
     /// Allocated the next TypeId.
@@ -1156,11 +1203,18 @@ impl ToTokens for TypeSpace {
 }
 
 impl Type<'_> {
+    /// The identifier of this type within its [`TypeSpace`], e.g. for use
+    /// with [`TypeSpace::to_stream_for`].
+    pub fn id(&self) -> TypeId {
+        self.type_id.clone()
+    }
+
     /// The name of the type as a String.
     pub fn name(&self) -> String {
         let Type {
             type_space,
             type_entry,
+            ..
         } = self;
         type_entry.type_name(type_space)
     }
@@ -1171,6 +1225,7 @@ impl Type<'_> {
         let Type {
             type_space,
             type_entry,
+            ..
         } = self;
         type_entry.type_ident(type_space, &type_space.settings.type_mod)
     }
@@ -1182,6 +1237,7 @@ impl Type<'_> {
         let Type {
             type_space,
             type_entry,
+            ..
         } = self;
         type_entry.type_parameter_ident(type_space, None)
     }
@@ -1194,6 +1250,7 @@ impl Type<'_> {
         let Type {
             type_space,
             type_entry,
+            ..
         } = self;
         type_entry.type_parameter_ident(type_space, Some(lifetime))
     }
@@ -1245,6 +1302,7 @@ impl Type<'_> {
         let Type {
             type_space,
             type_entry,
+            ..
         } = self;
         type_entry.has_impl(type_space, impl_name)
     }
@@ -1254,6 +1312,7 @@ impl Type<'_> {
         let Type {
             type_space,
             type_entry,
+            ..
         } = self;
 
         if !type_space.settings.struct_builder {
