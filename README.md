@@ -123,6 +123,47 @@ named properties **and** a flattened map of additional properties by using a
 value for `additionalProperties` that is equivalent to `true` or absent with
 regard to validation, by using some e.g. `{}`.
 
+## OpenAPI documents
+
+In addition to JSON Schema documents, typify can generate types from the
+component schemas of an OpenAPI document. Versions 3.0.x, 3.1.x, and 3.2.x are
+supported; schemas are interpreted according to the JSON Schema dialect implied
+by the document version: the OpenAPI 3.0 dialect (with its `nullable` keyword,
+boolean exclusive bounds, etc.) for 3.0.x documents, and JSON Schema 2020-12
+(with `type` arrays, `prefixItems`, etc.) for 3.1.x and 3.2.x documents (also
+honoring the `jsonSchemaDialect` field).
+
+`cargo typify` detects OpenAPI documents (in JSON) automatically, as does the
+`import_types!` macro; the builder interface has a dedicated method:
+
+```rust
+let mut type_space = typify::TypeSpace::default();
+type_space.add_openapi_document(&serde_json::from_str(&openapi_json)?)?;
+```
+
+Only `components.schemas` is considered: typify is a type generator, so
+operations, parameters, and other document contents are not examined. To
+generate a full API client from an OpenAPI document, see
+[progenitor](https://github.com/oxidecomputer/progenitor), which builds on
+typify. YAML documents should be converted to JSON first (e.g. with `yq -o=json
+.` or `python3 -c 'import json,sys,yaml;
+json.dump(yaml.safe_load(sys.stdin), sys.stdout)'`).
+
+References must point to schemas within the document
+(`#/components/schemas/<name>`); constructs that typify cannot faithfully
+honor--external references, references into the interior of a schema, `$id`,
+`$anchor`, `$dynamicRef`, and `$defs` nested within a component schema--produce
+errors that indicate the offending location within the document rather than
+generating subtly incorrect types. Two common spec-invalid constructs whose
+intent is unambiguous are tolerated: `nullable` appearing in 3.1+ documents
+(typically the residue of a mechanical 3.0 upgrade) is honored with a warning,
+and `default: null` on a non-nullable 3.0 schema is ignored.
+
+All of typify's customization applies to OpenAPI-derived types exactly as it
+does to JSON Schema-derived types: `patch` and `replace` keyed by the component
+schema name, `convert` matched against the schema (as normalized to typify's
+internal dialect), and the `x-rust-type` extension.
+
 ## Rust -> Schema -> Rust
 
 Schemas derived from Rust types may include an extension that provides

@@ -7,6 +7,10 @@ code:
 $ cargo typify my_types.json
 ```
 
+The input may also be an OpenAPI document (versions 3.0.x, 3.1.x, and 3.2.x, in
+JSON), in which case Rust code is generated for its component schemas
+(`components.schemas`).
+
 This is a wrapper around the [`typify`](https://crates.io/crates/typify) crate
 for use at the command-line.
 

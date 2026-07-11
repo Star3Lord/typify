@@ -156,6 +156,32 @@ fn test_multi_derive() {
 }
 
 #[test]
+fn test_openapi_document() {
+    let input = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../typify/tests/openapi/petstore-3-0.json"
+    );
+
+    let temp = TempDir::new().unwrap();
+    let output_file = temp.path().join("output.rs");
+
+    assert_cmd::cargo::cargo_bin_cmd!()
+        .args([
+            "typify",
+            input,
+            "--no-builder",
+            "--output",
+            output_file.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let actual = std::fs::read_to_string(output_file).unwrap();
+
+    assert_contents("tests/outputs/petstore.rs", &actual);
+}
+
+#[test]
 fn test_help() {
     let output = assert_cmd::cargo::cargo_bin_cmd!()
         .args(["typify", "--help"])

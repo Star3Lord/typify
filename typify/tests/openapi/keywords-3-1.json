@@ -1,0 +1,84 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "JSON Schema 2020-12 constructs",
+    "version": "1.0.0"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Pet": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "examples": [
+              "fido"
+            ]
+          },
+          "nickname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "age": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 30
+          },
+          "location": {
+            "$ref": "#/components/schemas/Coordinates"
+          }
+        }
+      },
+      "Pets": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/Pet"
+        }
+      },
+      "Coordinates": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "number"
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2
+      },
+      "LabeledRow": {
+        "description": "A tuple with a label followed by measurements",
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "string"
+          }
+        ],
+        "items": {
+          "type": "integer"
+        },
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "IdOrName": {
+        "type": [
+          "integer",
+          "string"
+        ]
+      },
+      "Nickname": {
+        "description": "A converted document may carry 3.0-isms such as nullable",
+        "type": "string",
+        "nullable": true
+      }
+    }
+  }
+}

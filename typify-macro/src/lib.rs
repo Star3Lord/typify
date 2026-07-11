@@ -19,8 +19,8 @@ use typify_impl::{
 mod token_utils;
 
 /// Import types from a schema file. This may be invoked with simply a pathname
-/// for a JSON Schema file (relative to `$CARGO_MANIFEST_DIR`), or it may be
-/// invoked with a structured form:
+/// for a JSON Schema file or OpenAPI document (relative to
+/// `$CARGO_MANIFEST_DIR`), or it may be invoked with a structured form:
 /// ```
 /// use typify_macro::import_types;
 /// import_types!(
@@ -29,7 +29,8 @@ mod token_utils;
 /// );
 /// ```
 ///
-/// - `schema`: string literal; the JSON schema file
+/// - `schema`: string literal; the JSON Schema file or OpenAPI document
+///   (detected by the presence of a top-level `openapi` member)
 ///
 /// - `derives`: optional array of derive macro paths; the derive macros to be
 ///   applied to all generated types
@@ -252,19 +253,39 @@ fn do_import_types(item: TokenStream) -> Result<TokenStream, syn::Error> {
 
     let path = dir.join(schema.value());
 
-    let root_schema: schemars::schema::RootSchema =
+    let content: serde_json::Value =
         serde_json::from_reader(std::fs::File::open(&path).map_err(|e| {
             syn::Error::new(
                 schema.span(),
                 format!("couldn't read file {}: {}", schema.value(), e),
             )
         })?)
-        .unwrap();
+        .map_err(|e| {
+            syn::Error::new(
+                schema.span(),
+                format!("couldn't parse file {}: {}", schema.value(), e),
+            )
+        })?;
 
     let mut type_space = TypeSpace::new(&settings);
-    type_space
-        .add_root_schema(root_schema)
-        .map_err(|e| into_syn_err(e, schema.span()))?;
+    // An `openapi` member indicates an OpenAPI document; anything else is
+    // treated as a JSON Schema.
+    if content.get("openapi").is_some() {
+        type_space
+            .add_openapi_document(&content)
+            .map_err(|e| into_syn_err(e, schema.span()))?;
+    } else {
+        let root_schema: schemars::schema::RootSchema =
+            serde_json::from_value(content).map_err(|e| {
+                syn::Error::new(
+                    schema.span(),
+                    format!("couldn't parse {} as a JSON Schema: {}", schema.value(), e),
+                )
+            })?;
+        type_space
+            .add_root_schema(root_schema)
+            .map_err(|e| into_syn_err(e, schema.span()))?;
+    }
 
     let path_str = path.to_string_lossy();
     let output = quote! {
