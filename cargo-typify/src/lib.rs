@@ -1,6 +1,7 @@
 // Copyright 2025 Oxide Computer Company
 
-//! cargo command to generate Rust code from a JSON Schema.
+//! cargo command to generate Rust code from a JSON Schema or OpenAPI
+//! document.
 
 #![deny(missing_docs)]
 
@@ -18,7 +19,8 @@ use typify::{CrateVers, TypeSpace, TypeSpaceSettings, UnknownPolicy};
         .args(["builder", "no_builder"]),
 ))]
 pub struct CliArgs {
-    /// The input file to read from
+    /// The input file to read from: a JSON Schema document or an OpenAPI
+    /// (3.0.x, 3.1.x, or 3.2.x) document, in JSON
     pub input: PathBuf,
 
     /// Whether to include a builder-style interface, this is the default.
@@ -136,13 +138,13 @@ impl std::str::FromStr for CrateSpec {
     }
 }
 
-/// Generate Rust code for the selected JSON Schema.
+/// Generate Rust code for the selected JSON Schema or OpenAPI document.
 pub fn convert(args: &CliArgs) -> Result<String> {
     let content = std::fs::read_to_string(&args.input)
         .wrap_err_with(|| format!("Failed to open input file: {}", &args.input.display()))?;
 
-    let schema = serde_json::from_str::<schemars::schema::RootSchema>(&content)
-        .wrap_err("Failed to parse input file as JSON Schema")?;
+    let input = serde_json::from_str::<serde_json::Value>(&content)
+        .wrap_err("Failed to parse input file as JSON")?;
 
     let mut settings = TypeSpaceSettings::default();
     settings.with_struct_builder(args.use_builder());
@@ -179,9 +181,19 @@ pub fn convert(args: &CliArgs) -> Result<String> {
     }
 
     let mut type_space = TypeSpace::new(&settings);
-    type_space
-        .add_root_schema(schema)
-        .wrap_err("Schema conversion failed")?;
+    // An `openapi` member indicates an OpenAPI document; anything else is
+    // treated as a JSON Schema.
+    if input.get("openapi").is_some() {
+        type_space
+            .add_openapi_document(&input)
+            .wrap_err("OpenAPI document conversion failed")?;
+    } else {
+        let schema = serde_json::from_value::<schemars::schema::RootSchema>(input)
+            .wrap_err("Failed to parse input file as JSON Schema")?;
+        type_space
+            .add_root_schema(schema)
+            .wrap_err("Schema conversion failed")?;
+    }
 
     let intro = "#![allow(clippy::redundant_closure_call)]
 #![allow(clippy::needless_lifetimes)]
