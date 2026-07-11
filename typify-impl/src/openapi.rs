@@ -519,6 +519,9 @@ fn unsupported_keyword_reason(key: &str) -> String {
              move shared schemas to components.schemas",
             key,
         ),
+        "$schema" => "per-schema dialect selection is not supported; schemas \
+             are interpreted according to the dialect of the document"
+            .to_string(),
         _ => format!(
             "`{}` is not supported; references must be of the form \
              \"#/components/schemas/<name>\"",
@@ -1075,6 +1078,14 @@ mod tests {
             normalize_2020_12(json!({ "$dynamicRef": "#meta" })),
             "#/$dynamicRef",
             "`$dynamicRef` is not supported",
+        );
+        assert_invalid(
+            normalize_2020_12(json!({
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "string",
+            })),
+            "#/$schema",
+            "per-schema dialect selection is not supported",
         );
         assert_invalid(
             normalize_3_0(json!({
