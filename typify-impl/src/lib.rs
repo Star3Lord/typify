@@ -306,6 +306,7 @@ pub struct TypeSpaceSettings {
     optional_properties: OptionalProperties,
     all_of_strategy: AllOfStrategy,
     open_enum_variant: Option<String>,
+    schema_docs: SchemaDocs,
 
     unknown_crates: UnknownPolicy,
     crates: BTreeMap<String, CrateSpec>,
@@ -339,6 +340,14 @@ pub enum OptionalProperties {
     /// [`OptionalProperties::Collapsed`] both directions conflate the two.
     /// Schema-specified default values do not affect the representation.
     Explicit,
+}
+
+/// Whether generated doc comments embed the JSON schema.
+#[derive(Default, Debug, Clone, Copy, Eq, PartialEq)]
+enum SchemaDocs {
+    #[default]
+    Include,
+    Omit,
 }
 
 /// Strategy for interpreting `allOf` constructions.
@@ -515,6 +524,20 @@ impl TypeSpaceSettings {
     /// is left closed. Schema-specified default values are unaffected.
     pub fn with_open_enum_variant<S: ToString>(&mut self, variant_name: S) -> &mut Self {
         self.open_enum_variant = Some(variant_name.to_string());
+        self
+    }
+
+    /// Whether the doc comment of each generated type embeds its JSON
+    /// schema (in a collapsible block after the description). The default
+    /// is `true`; setting `false` limits doc comments to the schema's
+    /// description, which can be preferable when generated types are read
+    /// primarily through IDE hovers.
+    pub fn with_schema_in_docs(&mut self, schema_in_docs: bool) -> &mut Self {
+        self.schema_docs = if schema_in_docs {
+            SchemaDocs::Include
+        } else {
+            SchemaDocs::Omit
+        };
         self
     }
 
@@ -1548,6 +1571,36 @@ mod tests {
         }
 
         validate_output::<Things>();
+    }
+
+    #[test]
+    fn test_schema_in_docs() {
+        let schema = json!({
+            "title": "Sprocket",
+            "description": "a sprocket",
+            "type": "object",
+            "properties": {
+                "teeth": { "type": "integer" },
+            },
+        });
+
+        // By default, doc comments embed the JSON schema.
+        let schema_value: schemars::schema::RootSchema =
+            serde_json::from_value(schema.clone()).unwrap();
+        let mut type_space = TypeSpace::default();
+        type_space.add_root_schema(schema_value).unwrap();
+        let text = type_space.to_stream().to_string();
+        assert!(text.contains("a sprocket"));
+        assert!(text.contains("JSON schema"));
+
+        // ... and with_schema_in_docs(false) limits them to the description.
+        let schema_value: schemars::schema::RootSchema = serde_json::from_value(schema).unwrap();
+        let mut type_space =
+            TypeSpace::new(TypeSpaceSettings::default().with_schema_in_docs(false));
+        type_space.add_root_schema(schema_value).unwrap();
+        let text = type_space.to_stream().to_string();
+        assert!(text.contains("a sprocket"));
+        assert!(!text.contains("JSON schema"));
     }
 
     #[test]

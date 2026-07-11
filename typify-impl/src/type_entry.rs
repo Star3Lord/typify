@@ -782,7 +782,7 @@ impl TypeEntry {
             schema: SchemaWrapper(schema),
         } = enum_details;
 
-        let doc = make_doc(name, description.as_ref(), schema);
+        let doc = make_doc(type_space, name, description.as_ref(), schema);
 
         // The open-enum catch-all (see
         // [`TypeSpaceSettings::with_open_enum_variant`]): plain externally
@@ -1180,7 +1180,7 @@ impl TypeEntry {
             deny_unknown_fields,
             schema: SchemaWrapper(schema),
         } = struct_details;
-        let doc = make_doc(name, description.as_ref(), schema);
+        let doc = make_doc(type_space, name, description.as_ref(), schema);
 
         // Generate the serde directives as needed.
         let mut serde_options = Vec::new();
@@ -1423,7 +1423,7 @@ impl TypeEntry {
             constraints,
             schema: SchemaWrapper(schema),
         } = newtype_details;
-        let doc = make_doc(name, description.as_ref(), schema);
+        let doc = make_doc(type_space, name, description.as_ref(), schema);
 
         let type_name = format_ident!("{}", name);
         let inner_type = type_space.id_to_entry.get(type_id).unwrap();
@@ -2089,11 +2089,21 @@ impl TypeEntry {
     }
 }
 
-fn make_doc(name: &str, description: Option<&String>, schema: &Schema) -> TokenStream {
+fn make_doc(
+    type_space: &TypeSpace,
+    name: &str,
+    description: Option<&String>,
+    schema: &Schema,
+) -> TokenStream {
     let desc = match description {
         Some(desc) => desc,
         None => &format!("`{}`", name),
     };
+    if let crate::SchemaDocs::Omit = type_space.settings.schema_docs {
+        return quote! {
+            #[doc = #desc]
+        };
+    }
     let schema_json = serde_json::to_string_pretty(schema).unwrap();
     let schema_lines = schema_json.lines();
     quote! {
