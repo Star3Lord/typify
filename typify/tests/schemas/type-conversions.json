@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "validate schema-to-type conversions, in particular subset matching and specificity",
+  "title": "ConversionHolder",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "matches a conversion despite the additional constraint and metadata",
+      "type": "string",
+      "format": "uuid",
+      "maxLength": 36
+    },
+    "note": {
+      "type": "string"
+    },
+    "price": {
+      "type": "number",
+      "format": "currency",
+      "minimum": 0
+    }
+  }
+}

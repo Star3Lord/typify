@@ -475,11 +475,26 @@ impl TypeSpaceSettings {
         self
     }
 
-    /// Replace a given schema with a named type. The given schema must precisely
-    /// match the schema from the input, including fields such as `description`.
-    /// Typical usage is to map a schema definition to a builtin type or type
-    /// provided by a crate, such as `'rust_decimal::Decimal'`. If the same schema
-    /// is specified multiple times, the first one is honored.
+    /// Replace schemas of a given shape with a named type. Typical usage is
+    /// to map a schema to a builtin type or a type provided by a crate, such
+    /// as `'rust_decimal::Decimal'`.
+    ///
+    /// A schema from the input matches the conversion if every keyword the
+    /// conversion schema specifies is present in the input schema with an
+    /// equal value; the input schema may specify additional keywords (for
+    /// example, the conversion `{ "type": "string", "format": "uuid" }`
+    /// matches an input schema that also specifies a `maxLength`). Metadata
+    /// such as the title and description is ignored on both sides. If
+    /// several conversions match a schema, the most specific--the one that
+    /// specifies the most keywords--is used; among equally specific
+    /// conversions, the first one specified is honored.
+    ///
+    /// Note that a matching conversion takes precedence over typify's
+    /// built-in handling: a conversion for `{ "type": "string" }` applies to
+    /// **all** string schemas, including those with a `format` that typify
+    /// would otherwise map to a dedicated type. Specify additional, more
+    /// specific conversions for the shapes that should be mapped
+    /// differently.
     ///
     /// # Examples
     ///

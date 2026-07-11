@@ -16,6 +16,7 @@
 https://github.com/oxidecomputer/typify/compare/v0.7.0\...HEAD[Full list of commits]
 
 * Generate types from the component schemas of OpenAPI 3.0.x, 3.1.x, and 3.2.x documents
+* Conversions (the `convert` setting) now match schemas by subset: a conversion applies to input schemas that carry additional keywords, and the most specific matching conversion wins. Previously a conversion had to match the input schema exactly (modulo metadata).
 
 == 0.7.0 (released 2026-06-05)
 

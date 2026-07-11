@@ -37,6 +37,52 @@ fn test_custom_map() {
     trybuild::TestCases::new().pass("tests/schemas/maps_custom.rs");
 }
 
+/// Ensure that conversions apply by subset matching: a conversion matches
+/// schemas that carry additional keywords, and the most specific matching
+/// conversion wins.
+#[test]
+fn test_subset_conversions() {
+    let uuid_schema = serde_json::from_value(json!({
+        "type": "string",
+        "format": "uuid",
+    }))
+    .unwrap();
+    let string_schema = serde_json::from_value(json!({
+        "type": "string",
+    }))
+    .unwrap();
+    let number_schema = serde_json::from_value(json!({
+        "type": "number",
+    }))
+    .unwrap();
+
+    validate_schema(
+        "tests/schemas/type-conversions.json".into(),
+        "tests/schemas/type-conversions-subset.rs".into(),
+        TypeSpaceSettings::default()
+            // Less specific than the uuid conversion; wins only for plain
+            // strings.
+            .with_conversion(
+                string_schema,
+                "::std::string::String",
+                [TypeSpaceImpl::Display, TypeSpaceImpl::FromStr].into_iter(),
+            )
+            .with_conversion(
+                uuid_schema,
+                "::uuid::Uuid",
+                [TypeSpaceImpl::Display, TypeSpaceImpl::FromStr].into_iter(),
+            )
+            .with_conversion(
+                number_schema,
+                "::serde_json::Number",
+                [TypeSpaceImpl::Display].into_iter(),
+            ),
+    )
+    .unwrap();
+
+    trybuild::TestCases::new().pass("tests/schemas/type-conversions-subset.rs");
+}
+
 /// Ensure that enumerated types include the enumeration in their JsonSchema
 /// implementation.
 #[test]
