@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "validate open string enums: the catch-all variant, the collision guard, and the scoping to plain string enums",
+  "definitions": {
+    "color": {
+      "type": "string",
+      "enum": [
+        "red",
+        "green",
+        "blue"
+      ]
+    },
+    "defaulted-color": {
+      "type": "string",
+      "enum": [
+        "red",
+        "green"
+      ],
+      "default": "red"
+    },
+    "already-open": {
+      "description": "declares a variant with the configured catch-all name, so it stays closed",
+      "type": "string",
+      "enum": [
+        "alpha",
+        "Other"
+      ]
+    },
+    "message": {
+      "description": "tagged enums are not opened",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "text"
+              ]
+            },
+            "body": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "body"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ping"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    }
+  }
+}

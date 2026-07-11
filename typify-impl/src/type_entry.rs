@@ -784,13 +784,40 @@ impl TypeEntry {
 
         let doc = make_doc(name, description.as_ref(), schema);
 
+        // The open-enum catch-all (see
+        // [`TypeSpaceSettings::with_open_enum_variant`]): plain externally
+        // tagged string enums gain a trailing
+        // `#[serde(untagged)] <Name>(String)` variant so that undocumented
+        // wire values round-trip instead of failing deserialization. Enums
+        // that already have a variant of the configured name stay closed.
+        let open_variant = type_space
+            .settings
+            .open_enum_variant
+            .as_deref()
+            .filter(|_| {
+                tag_type == &EnumTagType::External
+                    && bespoke_impls.contains(&TypeEntryEnumImpl::AllSimpleVariants)
+            })
+            .map(|open_name| sanitize(open_name, Case::Pascal))
+            .filter(|open_name| {
+                variants
+                    .iter()
+                    .all(|variant| variant.ident_name.as_ref() != Some(open_name))
+            })
+            .map(|open_name| format_ident!("{}", open_name));
+
         // TODO this is a one-off for some useful traits; this should move into
         // the creation of the enum type.
         if variants
             .iter()
             .all(|variant| matches!(variant.details, VariantDetails::Simple))
         {
-            derive_set.extend(["Copy", "PartialOrd", "Ord", "PartialEq", "Eq", "Hash"]);
+            // An opened enum owns a String in its catch-all, so it cannot
+            // be Copy.
+            if open_variant.is_none() {
+                derive_set.insert("Copy");
+            }
+            derive_set.extend(["PartialOrd", "Ord", "PartialEq", "Eq", "Hash"]);
         }
 
         let mut serde_options = Vec::new();
@@ -820,10 +847,18 @@ impl TypeEntry {
 
         let type_name = format_ident!("{}", name);
 
-        let variants_decl = variants
+        let mut variants_decl = variants
             .iter()
             .map(|variant| output_variant(variant, type_space, output, name))
             .collect::<Vec<_>>();
+        if let Some(open_name) = &open_variant {
+            variants_decl.push(quote! {
+                #[doc = r" Catch-all for values outside the documented set;"]
+                #[doc = r" carries the raw wire string."]
+                #[serde(untagged)]
+                #open_name(::std::string::String),
+            });
+        }
 
         // It should not be possible to construct an untagged enum
         // with more than one simple variant--it would not be usable.
@@ -851,11 +886,28 @@ impl TypeEntry {
                     })
                     .unzip();
 
+                // An opened enum's catch-all extends these impls: Display
+                // writes the carried string and FromStr becomes
+                // irrefutable. (The catch-all's String also precludes
+                // matching on `*self`.)
+                let display_scrutinee = match &open_variant {
+                    Some(_) => quote! { self },
+                    None => quote! { *self },
+                };
+                let display_fallback = open_variant.as_ref().map(|open_name| {
+                    quote! { Self::#open_name(value) => f.write_str(value.as_str()), }
+                });
+                let from_str_fallback = match &open_variant {
+                    Some(open_name) => quote! { _ => Ok(Self::#open_name(value.to_string())), },
+                    None => quote! { _ => Err("invalid value".into()), },
+                };
+
                 quote! {
                     impl ::std::fmt::Display for #type_name {
                         fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                            match *self {
+                            match #display_scrutinee {
                                 #(Self::#match_variants => f.write_str(#match_strs),)*
+                                #display_fallback
                             }
                         }
                     }
@@ -867,7 +919,7 @@ impl TypeEntry {
                         {
                             match value {
                                 #(#match_strs => Ok(Self::#match_variants),)*
-                                _ => Err("invalid value".into()),
+                                #from_str_fallback
                             }
                         }
                     }

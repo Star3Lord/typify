@@ -305,6 +305,7 @@ pub struct TypeSpaceSettings {
     struct_builder: bool,
     optional_properties: OptionalProperties,
     all_of_strategy: AllOfStrategy,
+    open_enum_variant: Option<String>,
 
     unknown_crates: UnknownPolicy,
     crates: BTreeMap<String, CrateSpec>,
@@ -497,6 +498,23 @@ impl TypeSpaceSettings {
     /// [`AllOfStrategy`]. The default is [`AllOfStrategy::Merge`].
     pub fn with_all_of_strategy(&mut self, strategy: AllOfStrategy) -> &mut Self {
         self.all_of_strategy = strategy;
+        self
+    }
+
+    /// Give every plain--externally tagged, all-simple-variant--string enum
+    /// a trailing catch-all variant with the given name (e.g. "Other").
+    /// Wire values outside the documented set deserialize into the
+    /// catch-all, which carries the raw string and re-serializes verbatim:
+    /// a lossless round-trip rather than a deserialization failure. This is
+    /// useful for APIs that document a closed value set but send values
+    /// outside it in practice.
+    ///
+    /// The `FromStr` implementation of an opened enum succeeds for any
+    /// input, and opened enums do not implement `Copy` (the catch-all owns
+    /// a `String`). An enum that already has a variant with the given name
+    /// is left closed. Schema-specified default values are unaffected.
+    pub fn with_open_enum_variant<S: ToString>(&mut self, variant_name: S) -> &mut Self {
+        self.open_enum_variant = Some(variant_name.to_string());
         self
     }
 

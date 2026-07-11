@@ -37,6 +37,21 @@ fn test_custom_map() {
     trybuild::TestCases::new().pass("tests/schemas/maps_custom.rs");
 }
 
+/// Ensure that opened string enums gain a lossless catch-all variant, that
+/// enums already declaring the configured name stay closed, and that tagged
+/// enums are unaffected.
+#[test]
+fn test_open_enums() {
+    validate_schema(
+        "tests/schemas/open-enums.json".into(),
+        "tests/schemas/open-enums-open.rs".into(),
+        TypeSpaceSettings::default().with_open_enum_variant("Other"),
+    )
+    .unwrap();
+
+    trybuild::TestCases::new().pass("tests/schemas/open-enums-open.rs");
+}
+
 /// Ensure that the `Compose` allOf strategy embeds referenced base types as
 /// flattened members, and that constructions that don't fit the
 /// single-inheritance idiom fall back to merging.
