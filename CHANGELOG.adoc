@@ -17,6 +17,11 @@ https://github.com/oxidecomputer/typify/compare/v0.7.0\...HEAD[Full list of comm
 
 * Generate types from the component schemas of OpenAPI 3.0.x, 3.1.x, and 3.2.x documents
 * Conversions (the `convert` setting) now match schemas by subset: a conversion applies to input schemas that carry additional keywords, and the most specific matching conversion wins. Previously a conversion had to match the input schema exactly (modulo metadata).
+* Add `OptionalProperties::Explicit`, representing every non-required object property as an `Option<T>`
+* Add `AllOfStrategy::Compose`, generating `#[serde(flatten)]`-composed structs for single-inheritance `allOf` constructions
+* Add `with_open_enum_variant`, giving plain string enums a lossless catch-all variant
+* Add `with_schema_in_docs(false)` to omit the embedded JSON schema from doc comments
+* Add `TypeSpace::to_stream_for`, `TypeSpace::iter_definitions`, and `Type::id` for organizing generated types into caller-defined modules
 
 == 0.7.0 (released 2026-06-05)
 

@@ -1518,6 +1518,7 @@ impl TypeSpace {
     /// inline object subschemas contribute ordinary properties. Returns
     /// `Ok(None)`, deferring to schema merging, for any construction that
     /// doesn't provably fit that idiom.
+    #[allow(clippy::type_complexity)]
     fn convert_all_of_compose<'a>(
         &mut self,
         type_name: Name,
