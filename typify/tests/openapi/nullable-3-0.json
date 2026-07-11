@@ -1,0 +1,88 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "OpenAPI 3.0 dialect constructs",
+    "version": "1.0.0"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "NullableString": {
+        "title": "NullableString",
+        "description": "A schema titled with its own name must not collide with the type generated for its non-null half",
+        "type": "string",
+        "nullable": true
+      },
+      "NullableEnum": {
+        "type": "string",
+        "enum": [
+          "on",
+          "off"
+        ],
+        "nullable": true
+      },
+      "NullableEnumWithNull": {
+        "type": "string",
+        "enum": [
+          "yes",
+          "no",
+          null
+        ],
+        "nullable": true
+      },
+      "NullableRef": {
+        "$ref": "#/components/schemas/Widget",
+        "nullable": true
+      },
+      "NullableAllOf": {
+        "description": "The allOf indirection commonly used for nullable references",
+        "nullable": true,
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Widget"
+          }
+        ]
+      },
+      "NullableUnion": {
+        "nullable": true,
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "boolean"
+          }
+        ]
+      },
+      "Widget": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "gear"
+          },
+          "weight": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "teeth": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 64,
+            "exclusiveMaximum": false
+          },
+          "label": {
+            "type": "string",
+            "default": null
+          }
+        }
+      }
+    }
+  }
+}
