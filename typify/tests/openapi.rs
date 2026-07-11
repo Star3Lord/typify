@@ -47,6 +47,31 @@ fn validate_document(
     Ok(())
 }
 
+mod petstore {
+    typify::import_types!(schema = "tests/openapi/petstore-3-0.json");
+}
+
+#[test]
+fn test_openapi_macro() {
+    let pet: petstore::Pet = serde_json::from_value(json!({
+        "id": 10,
+        "name": "fido",
+        "status": "available",
+    }))
+    .unwrap();
+    assert_eq!(pet.status, Some(petstore::Status::Available));
+
+    let value = serde_json::to_value(&pet).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "id": 10,
+            "name": "fido",
+            "status": "available",
+        }),
+    );
+}
+
 #[test]
 fn test_openapi_document_errors() {
     for (document, error) in [
@@ -84,7 +109,10 @@ fn test_openapi_document_errors() {
     ] {
         let mut type_space = TypeSpace::default();
         assert_eq!(
-            type_space.add_openapi_document(&document).unwrap_err().to_string(),
+            type_space
+                .add_openapi_document(&document)
+                .unwrap_err()
+                .to_string(),
             error,
         );
     }
