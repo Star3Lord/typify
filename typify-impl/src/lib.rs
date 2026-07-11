@@ -31,6 +31,7 @@ mod cycles;
 mod defaults;
 mod enums;
 mod merge;
+mod openapi;
 mod output;
 mod rust_extension;
 mod structs;
@@ -53,6 +54,8 @@ pub enum Error {
         type_name: Option<String>,
         reason: String,
     },
+    #[error("invalid OpenAPI document at {location}: {reason}")]
+    InvalidOpenApi { location: String, reason: String },
 }
 
 impl Error {
@@ -832,6 +835,20 @@ impl TypeSpace {
         } else {
             Ok(None)
         }
+    }
+
+    /// Add all the types defined under `components.schemas` of an OpenAPI
+    /// document. Documents of OpenAPI versions 3.0.x, 3.1.x, and 3.2.x are
+    /// supported; schemas are interpreted according to the JSON Schema
+    /// dialect implied by the document version (and by the
+    /// `jsonSchemaDialect` field for OpenAPI 3.1 and later). Note that only
+    /// `components.schemas` is considered; operations, parameters, and other
+    /// document contents are not examined.
+    pub fn add_openapi_document(&mut self, document: &serde_json::Value) -> Result<()> {
+        let defs = openapi::extract_schemas(document)?
+            .into_iter()
+            .map(|(name, schema)| (RefKey::Def(name), schema));
+        self.add_ref_types_impl(defs)
     }
 
     /// Get a type given its ID.
