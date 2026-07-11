@@ -303,6 +303,7 @@ pub struct TypeSpaceSettings {
     extra_derives: Vec<String>,
     extra_attrs: Vec<String>,
     struct_builder: bool,
+    optional_properties: OptionalProperties,
 
     unknown_crates: UnknownPolicy,
     crates: BTreeMap<String, CrateSpec>,
@@ -317,6 +318,25 @@ pub struct TypeSpaceSettings {
 struct CrateSpec {
     version: CrateVers,
     rename: Option<String>,
+}
+
+/// Policy for representing non-required object properties.
+#[derive(Default, Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize)]
+pub enum OptionalProperties {
+    /// Non-required properties whose types have an intrinsic default value
+    /// collapse to bare types with a `#[serde(default)]` attribute (e.g.
+    /// `Vec<T>` rather than `Option<Vec<T>>`), as do properties whose
+    /// schemas specify a default value. Properties with no intrinsic or
+    /// explicit default become `Option<T>`.
+    #[default]
+    Collapsed,
+    /// Every non-required property is represented as `Option<T>`. This
+    /// preserves the wire distinction between an absent property and one
+    /// explicitly set to the default value: absent deserializes to `None`
+    /// and `None` is omitted from serialized output, whereas under
+    /// [`OptionalProperties::Collapsed`] both directions conflate the two.
+    /// Schema-specified default values do not affect the representation.
+    Explicit,
 }
 
 /// Policy to apply to external types described by schema extensions whose
@@ -440,6 +460,14 @@ impl TypeSpaceSettings {
     /// For structs, include a "builder" type that can be used to construct it.
     pub fn with_struct_builder(&mut self, struct_builder: bool) -> &mut Self {
         self.struct_builder = struct_builder;
+        self
+    }
+
+    /// Set the policy for representing non-required object properties; see
+    /// [`OptionalProperties`]. The default is
+    /// [`OptionalProperties::Collapsed`].
+    pub fn with_optional_properties(&mut self, policy: OptionalProperties) -> &mut Self {
+        self.optional_properties = policy;
         self
     }
 

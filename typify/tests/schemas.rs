@@ -7,7 +7,7 @@ use glob::glob;
 use quote::quote;
 use schemars::schema::RootSchema;
 use serde_json::json;
-use typify::{TypeSpace, TypeSpacePatch, TypeSpaceSettings};
+use typify::{OptionalProperties, TypeSpace, TypeSpacePatch, TypeSpaceSettings};
 use typify_impl::TypeSpaceImpl;
 
 #[test]
@@ -35,6 +35,21 @@ fn test_custom_map() {
     .unwrap();
 
     trybuild::TestCases::new().pass("tests/schemas/maps_custom.rs");
+}
+
+/// Ensure that the `Explicit` optional-properties policy represents every
+/// non-required property as an `Option`, disregarding intrinsic and
+/// schema-specified defaults.
+#[test]
+fn test_optional_properties_explicit() {
+    validate_schema(
+        "tests/schemas/types-with-defaults.json".into(),
+        "tests/schemas/types-with-defaults-explicit.rs".into(),
+        TypeSpaceSettings::default().with_optional_properties(OptionalProperties::Explicit),
+    )
+    .unwrap();
+
+    trybuild::TestCases::new().pass("tests/schemas/types-with-defaults-explicit.rs");
 }
 
 /// Ensure that conversions apply by subset matching: a conversion matches

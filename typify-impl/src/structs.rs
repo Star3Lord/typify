@@ -12,7 +12,7 @@ use crate::{
         WrappedValue,
     },
     util::{get_type_name, metadata_description, recase, Case},
-    Name, Result, TypeEntryDetails, TypeId, TypeSpace,
+    Name, OptionalProperties, Result, TypeEntryDetails, TypeId, TypeSpace,
 };
 
 impl TypeSpace {
@@ -134,6 +134,20 @@ impl TypeSpace {
 
         let state = if required.contains(prop_name) {
             StructPropertyState::Required
+        } else if let OptionalProperties::Explicit = self.settings.optional_properties {
+            // Every non-required property is an Option<T>, preserving the
+            // wire distinction between absent and default-valued properties;
+            // intrinsic and schema-specified defaults are disregarded. Types
+            // that are already optional (e.g. from nullable schemas) are not
+            // wrapped again.
+            let already_optional = matches!(
+                self.id_to_entry.get(&type_id).map(|entry| &entry.details),
+                Some(TypeEntryDetails::Option(_)),
+            );
+            if !already_optional {
+                type_id = self.id_to_option(&type_id);
+            }
+            StructPropertyState::Optional
         } else {
             // We can use serde's `default` and `skip_serializing_if`
             // construction for options, arrays, and maps--i.e. properties that
@@ -490,7 +504,10 @@ mod tests {
     use schemars::JsonSchema;
     use serde::Serialize;
 
-    use crate::{test_util::validate_output, Name, TypeSpace};
+    use crate::{
+        test_util::validate_output, Name, OptionalProperties, TypeDetails, TypeSpace,
+        TypeSpaceSettings,
+    };
 
     #[allow(dead_code)]
     #[derive(Serialize, JsonSchema, Schema)]
@@ -501,6 +518,59 @@ mod tests {
         charlie: Vec<(String, u32)>,
         delta: Option<String>,
         echo: Option<(u32, String)>,
+    }
+
+    #[test]
+    fn test_optional_properties_explicit() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "title": "Everything",
+            "properties": {
+                "plain": { "type": "string" },
+                "array": { "type": "array", "items": { "type": "string" } },
+                "flag": { "type": "boolean", "default": false },
+                "count": { "type": "integer", "default": 42 },
+                "nullable": { "type": ["string", "null"] },
+                "req": { "type": "string" },
+            },
+            "required": ["req"],
+        });
+        let schema = serde_json::from_value(schema).unwrap();
+
+        let mut type_space = TypeSpace::new(
+            TypeSpaceSettings::default().with_optional_properties(OptionalProperties::Explicit),
+        );
+        let type_id = type_space.add_root_schema(schema).unwrap().unwrap();
+        let ty = type_space.get_type(&type_id).unwrap();
+        let TypeDetails::Struct(struct_details) = ty.details() else {
+            panic!("expected a struct");
+        };
+
+        for info in struct_details.properties_info() {
+            let prop_ty = type_space.get_type(&info.type_id).unwrap();
+            if info.name == "req" {
+                assert!(info.required);
+                assert!(!matches!(prop_ty.details(), TypeDetails::Option(_)));
+            } else {
+                // Every non-required property--regardless of intrinsic or
+                // schema-specified defaults--is an Option (and never a
+                // double Option).
+                assert!(!info.required);
+                let TypeDetails::Option(inner_id) = prop_ty.details() else {
+                    panic!("property {} should be an Option", info.name);
+                };
+                let inner = type_space.get_type(&inner_id).unwrap();
+                assert!(
+                    !matches!(inner.details(), TypeDetails::Option(_)),
+                    "property {} is doubly optional",
+                    info.name,
+                );
+            }
+        }
+
+        // The disregarded schema defaults must not leave behind generated
+        // default functions.
+        assert!(!type_space.to_stream().to_string().contains("mod defaults"));
     }
 
     #[test]
