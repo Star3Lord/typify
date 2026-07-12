@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "validate the naming of the inner types of Option-forming constructions: the inner type must not collide with the definition's name",
+  "definitions": {
+    "phase": {
+      "description": "a string enum with a literal null member",
+      "type": "string",
+      "enum": [
+        "up",
+        "down",
+        null
+      ]
+    },
+    "defaulted-phase": {
+      "description": "a nullable enum whose null default belongs to the Option, not the inner enum",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "on",
+        "off",
+        null
+      ],
+      "default": null
+    },
+    "nullable-part": {
+      "description": "an anyOf-with-null wrap around an inline object",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "serial": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "serial"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullable-ref": {
+      "description": "an anyOf-with-null wrap around a reference keeps the referenced type",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/widget-part"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "widget-part": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

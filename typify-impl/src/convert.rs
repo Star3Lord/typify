@@ -87,21 +87,23 @@ impl TypeSpace {
                             .cloned()
                             .collect()
                     });
+                    // The schema's default belongs to the Option--null in
+                    // particular is not a value of the non-null inner
+                    // type--so it is not propagated into the inner schema.
+                    // (The caller retains it via the returned metadata.)
+                    let inner_metadata = metadata.as_ref().map(|m| {
+                        Box::new(Metadata {
+                            default: None,
+                            ..*m.clone()
+                        })
+                    });
                     let ss = Schema::Object(SchemaObject {
                         instance_type: Some(SingleOrVec::from(*other_type)),
                         enum_values,
+                        metadata: inner_metadata,
                         ..schema.clone()
                     });
-                    // An Option type won't usually get a name--unless one is
-                    // required (in which case we'll generated a newtype
-                    // wrapper to give it a name). In such a case, we invent a
-                    // new name for the inner type; otherwise, the inner type
-                    // can just have this name.
-                    let inner_type_name = match &type_name {
-                        Name::Required(name) => Name::Suggested(format!("{}Inner", name)),
-                        _ => type_name,
-                    };
-                    self.convert_option(inner_type_name, metadata, &ss)
+                    self.convert_option(type_name, metadata, &ss)
                 } else {
                     // .. otherwise we try again with a simpler type.
                     let new_schema = SchemaObject {
@@ -1005,9 +1007,16 @@ impl TypeSpace {
                 self.convert_never(type_name, original_schema)
             }
         } else {
+            // If a null makes this an Option, the enum of the non-null
+            // variants is a distinct type that must not take the outer
+            // type's (required) name; see `convert_option`.
+            let enum_type_name = match (has_null, &type_name) {
+                (true, Name::Required(name)) => Name::Suggested(format!("{}Inner", name)),
+                _ => type_name,
+            };
             let mut ty = TypeEntryEnum::from_metadata(
                 self,
-                type_name,
+                enum_type_name,
                 metadata,
                 EnumTagType::External,
                 variants,
@@ -2310,7 +2319,17 @@ impl TypeSpace {
         metadata: &'a Option<Box<Metadata>>,
         schema: &'_ Schema,
     ) -> Result<(TypeEntry, &'a Option<Box<Metadata>>)> {
-        let (ty, _) = self.convert_schema(type_name, schema)?;
+        // An Option type won't usually get a name--unless one is required
+        // (in which case we'll generate a newtype wrapper to give it a
+        // name). In such a case, we invent a new name for the inner type;
+        // otherwise the inner type and the wrapper would collide (e.g.
+        // `X(Option<X>)`). If no name is required, the inner type can just
+        // have this name.
+        let inner_type_name = match &type_name {
+            Name::Required(name) => Name::Suggested(format!("{}Inner", name)),
+            _ => type_name,
+        };
+        let (ty, _) = self.convert_schema(inner_type_name, schema)?;
         let ty = self.type_to_option(ty);
 
         Ok((ty, metadata))

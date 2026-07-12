@@ -70329,7 +70329,6 @@ impl ::std::convert::TryFrom<::std::string::String> for PullRequestReviewComment
 #[doc = r" ```json"]
 #[doc = "{"]
 #[doc = "  \"description\": \"The side of the first line of the range for a multi-line comment.\","]
-#[doc = "  \"default\": \"RIGHT\","]
 #[doc = "  \"type\": \"string\","]
 #[doc = "  \"enum\": ["]
 #[doc = "    \"LEFT\","]
