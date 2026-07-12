@@ -826,6 +826,24 @@ pub fn accept_as_ident(ident: &str) -> bool {
     }
 }
 
+/// The identifier that typify generates for a type of the given name, e.g.
+/// the Rust name of the type generated for a `$defs` entry or an OpenAPI
+/// component schema of that name. This is useful for translating
+/// schema-name-keyed configuration into the names that generated code (and
+/// settings such as [`TypeSpaceSettings::with_replacement`]) use, ahead of
+/// type generation.
+///
+/// [`TypeSpaceSettings::with_replacement`]: crate::TypeSpaceSettings::with_replacement
+pub fn rust_type_ident(name: &str) -> String {
+    sanitize(name, Case::Pascal)
+}
+
+/// The identifier that typify generates for a struct member of the given
+/// name; the field-name counterpart of [`rust_type_ident`].
+pub fn rust_field_ident(name: &str) -> String {
+    sanitize(name, Case::Snake)
+}
+
 pub(crate) fn recase(input: &str, case: Case) -> (String, Option<String>) {
     let new = sanitize(input, case);
     let rename = if new == input {
@@ -1001,7 +1019,10 @@ mod tests {
     };
 
     use crate::{
-        util::{decode_segment, sanitize, schemas_mutually_exclusive, Case, ReorderedInstanceType},
+        util::{
+            decode_segment, rust_field_ident, rust_type_ident, sanitize,
+            schemas_mutually_exclusive, Case, ReorderedInstanceType,
+        },
         Name,
     };
 
@@ -1111,6 +1132,16 @@ mod tests {
     fn test_decode_segment() {
         assert_eq!(decode_segment("foo~1bar"), "foo/bar");
         assert_eq!(decode_segment("foo~0bar"), "foo~bar");
+    }
+
+    #[test]
+    fn test_rust_idents() {
+        assert_eq!(rust_type_ident("workflow-run"), "WorkflowRun");
+        assert_eq!(rust_type_ident("+1"), "Plus1");
+        assert_eq!(rust_type_ident("type"), "Type");
+        assert_eq!(rust_field_ident("cancelAll"), "cancel_all");
+        assert_eq!(rust_field_ident("-1"), "minus1");
+        assert_eq!(rust_field_ident("type"), "type_");
     }
 
     #[test]

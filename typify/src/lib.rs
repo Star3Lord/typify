@@ -156,6 +156,8 @@
 #![deny(missing_docs)]
 
 pub use typify_impl::accept_as_ident;
+pub use typify_impl::rust_field_ident;
+pub use typify_impl::rust_type_ident;
 pub use typify_impl::AllOfStrategy;
 pub use typify_impl::CrateVers;
 pub use typify_impl::Error;
