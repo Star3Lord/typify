@@ -1137,7 +1137,9 @@ mod tests {
     #[test]
     fn test_rust_idents() {
         assert_eq!(rust_type_ident("workflow-run"), "WorkflowRun");
-        assert_eq!(rust_type_ident("+1"), "Plus1");
+        // The special cases bypass the case transformation, mirroring
+        // generation exactly.
+        assert_eq!(rust_type_ident("+1"), "plus1");
         assert_eq!(rust_type_ident("type"), "Type");
         assert_eq!(rust_field_ident("cancelAll"), "cancel_all");
         assert_eq!(rust_field_ident("-1"), "minus1");
