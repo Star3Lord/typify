@@ -1432,7 +1432,17 @@ impl TypeEntry {
         let inner_type = type_space.id_to_entry.get(type_id).unwrap();
         let inner_type_name = inner_type.type_ident(type_space, &None);
 
-        let is_str = matches!(inner_type.details, TypeEntryDetails::String);
+        // A native type of the std string path is a string too (e.g. from a
+        // conversion): it must take the string paths below--in particular,
+        // the newtype's `From<String>` makes the manual `TryFrom<String>`
+        // ladder a conflicting implementation of the blanket impl.
+        let is_str = match &inner_type.details {
+            TypeEntryDetails::String => true,
+            TypeEntryDetails::Native(TypeEntryNative { type_name, .. }) => {
+                type_name == "::std::string::String"
+            }
+            _ => false,
+        };
 
         // If this is just a wrapper around a string, we can derive some more
         // useful traits.

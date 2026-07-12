@@ -47,6 +47,9 @@ pub mod error {
 #[doc = "      \"type\": \"number\","]
 #[doc = "      \"format\": \"currency\","]
 #[doc = "      \"minimum\": 0.0"]
+#[doc = "    },"]
+#[doc = "    \"sku\": {"]
+#[doc = "      \"$ref\": \"#/definitions/sku\""]
 #[doc = "    }"]
 #[doc = "  },"]
 #[doc = "  \"$comment\": \"validate schema-to-type conversions, in particular subset matching and specificity\""]
@@ -62,6 +65,8 @@ pub struct ConversionHolder {
     pub note: ::std::option::Option<::std::string::String>,
     #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
     pub price: ::std::option::Option<::serde_json::Number>,
+    #[serde(default, skip_serializing_if = "::std::option::Option::is_none")]
+    pub sku: ::std::option::Option<Sku>,
 }
 impl ::std::default::Default for ConversionHolder {
     fn default() -> Self {
@@ -69,12 +74,65 @@ impl ::std::default::Default for ConversionHolder {
             id: Default::default(),
             note: Default::default(),
             price: Default::default(),
+            sku: Default::default(),
         }
     }
 }
 impl ConversionHolder {
     pub fn builder() -> builder::ConversionHolder {
         Default::default()
+    }
+}
+#[doc = "`Sku`"]
+#[doc = r""]
+#[doc = r" <details><summary>JSON schema</summary>"]
+#[doc = r""]
+#[doc = r" ```json"]
+#[doc = "{"]
+#[doc = "  \"type\": \"string\","]
+#[doc = "  \"pattern\": \"^S\","]
+#[doc = "  \"$comment\": \"a named definition matching a string conversion becomes a newtype over the native string type\""]
+#[doc = "}"]
+#[doc = r" ```"]
+#[doc = r" </details>"]
+#[derive(
+    :: serde :: Deserialize,
+    :: serde :: Serialize,
+    Clone,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+#[serde(transparent)]
+pub struct Sku(pub ::std::string::String);
+impl ::std::ops::Deref for Sku {
+    type Target = ::std::string::String;
+    fn deref(&self) -> &::std::string::String {
+        &self.0
+    }
+}
+impl ::std::convert::From<Sku> for ::std::string::String {
+    fn from(value: Sku) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<::std::string::String> for Sku {
+    fn from(value: ::std::string::String) -> Self {
+        Self(value)
+    }
+}
+impl ::std::str::FromStr for Sku {
+    type Err = ::std::convert::Infallible;
+    fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
+        Ok(Self(value.to_string()))
+    }
+}
+impl ::std::fmt::Display for Sku {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 #[doc = r" Types for composing complex structures."]
@@ -90,6 +148,7 @@ pub mod builder {
             ::std::option::Option<::serde_json::Number>,
             ::std::string::String,
         >,
+        sku: ::std::result::Result<::std::option::Option<super::Sku>, ::std::string::String>,
     }
     impl ::std::default::Default for ConversionHolder {
         fn default() -> Self {
@@ -97,6 +156,7 @@ pub mod builder {
                 id: Ok(Default::default()),
                 note: Ok(Default::default()),
                 price: Ok(Default::default()),
+                sku: Ok(Default::default()),
             }
         }
     }
@@ -131,6 +191,16 @@ pub mod builder {
                 .map_err(|e| format!("error converting supplied value for price: {e}"));
             self
         }
+        pub fn sku<T>(mut self, value: T) -> Self
+        where
+            T: ::std::convert::TryInto<::std::option::Option<super::Sku>>,
+            T::Error: ::std::fmt::Display,
+        {
+            self.sku = value
+                .try_into()
+                .map_err(|e| format!("error converting supplied value for sku: {e}"));
+            self
+        }
     }
     impl ::std::convert::TryFrom<ConversionHolder> for super::ConversionHolder {
         type Error = super::error::ConversionError;
@@ -141,6 +211,7 @@ pub mod builder {
                 id: value.id?,
                 note: value.note?,
                 price: value.price?,
+                sku: value.sku?,
             })
         }
     }
@@ -150,6 +221,7 @@ pub mod builder {
                 id: Ok(value.id),
                 note: Ok(value.note),
                 price: Ok(value.price),
+                sku: Ok(value.sku),
             }
         }
     }

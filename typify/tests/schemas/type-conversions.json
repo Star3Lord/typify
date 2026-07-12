@@ -17,6 +17,16 @@
       "type": "number",
       "format": "currency",
       "minimum": 0
+    },
+    "sku": {
+      "$ref": "#/definitions/sku"
+    }
+  },
+  "definitions": {
+    "sku": {
+      "$comment": "a named definition matching a string conversion becomes a newtype over the native string type",
+      "type": "string",
+      "pattern": "^S"
     }
   }
 }
