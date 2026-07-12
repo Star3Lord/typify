@@ -14,10 +14,19 @@ use crate::{type_entry::TypeEntry, TypeSpaceImpl};
 /// conversions that match a given schema, the most specific--the one that
 /// specifies the most keywords--is used; ties are broken in favor of the
 /// conversion specified first.
+///
+/// The `enum` and `const` keywords are exceptions to the subset rule: they
+/// define the schema's value set rather than constraining its shape, so an
+/// input schema that specifies them is only matched by conversions that
+/// specify them (equally). Without this, a conversion for
+/// `{ "type": "string" }` would swallow every string enumeration.
 #[derive(Debug, Default)]
 pub(crate) struct SchemaCache {
     conversions: Vec<(Map<String, Value>, TypeEntry)>,
 }
+
+/// Keywords that define a schema's value set; see [`SchemaCache`].
+const VALUE_KEYWORDS: [&str; 2] = ["enum", "const"];
 
 /// The keywords of a schema as a JSON object, with metadata excluded.
 fn keywords(schema: &SchemaObject) -> Map<String, Value> {
@@ -45,6 +54,9 @@ impl SchemaCache {
                 conversion
                     .iter()
                     .all(|(keyword, value)| search.get(keyword) == Some(value))
+                    && VALUE_KEYWORDS.iter().all(|keyword| {
+                        search.contains_key(*keyword) <= conversion.contains_key(*keyword)
+                    })
             })
             // The most specific conversion wins; `>` (not `>=`) retains the
             // earliest-specified conversion among equals.
@@ -172,6 +184,45 @@ mod tests {
                 "type": "integer",
                 "format": "int64",
                 "multipleOf": 2.0,
+            }),
+            Some("type_0"),
+        );
+    }
+
+    #[test]
+    fn test_value_keywords_must_be_specified() {
+        // `enum` and `const` define a value set; a conversion that doesn't
+        // speak to them must not match a schema that does.
+        let string_cache = cache(&[serde_json::json!({ "type": "string" })]);
+
+        assert_lookup(
+            &string_cache,
+            serde_json::json!({ "type": "string", "enum": ["a", "b"] }),
+            None,
+        );
+        assert_lookup(
+            &string_cache,
+            serde_json::json!({ "type": "string", "const": "a" }),
+            None,
+        );
+        // ... while shape constraints remain subset-matchable.
+        assert_lookup(
+            &string_cache,
+            serde_json::json!({ "type": "string", "pattern": "^a" }),
+            Some("type_0"),
+        );
+
+        // A conversion that specifies the value set matches it (equally).
+        let enum_cache = cache(&[serde_json::json!({
+            "type": "string",
+            "enum": ["a", "b"],
+        })]);
+        assert_lookup(
+            &enum_cache,
+            serde_json::json!({
+                "type": "string",
+                "enum": ["a", "b"],
+                "maxLength": 1,
             }),
             Some("type_0"),
         );

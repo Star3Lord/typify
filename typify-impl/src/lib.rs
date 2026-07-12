@@ -588,6 +588,13 @@ impl TypeSpaceSettings {
     /// specifies the most keywords--is used; among equally specific
     /// conversions, the first one specified is honored.
     ///
+    /// The `enum` and `const` keywords define a schema's value set rather
+    /// than constraining its shape, so they are excepted from subset
+    /// matching: an input schema that specifies them is only matched by
+    /// conversions that specify them equally. A conversion for
+    /// `{ "type": "string" }` therefore applies to constrained strings but
+    /// not to string enumerations.
+    ///
     /// Note that a matching conversion takes precedence over typify's
     /// built-in handling: a conversion for `{ "type": "string" }` applies to
     /// **all** string schemas, including those with a `format` that typify
