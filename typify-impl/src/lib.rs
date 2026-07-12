@@ -477,6 +477,11 @@ impl TypeSpaceSettings {
     }
 
     /// Add an additional derive macro to apply to all defined types.
+    ///
+    /// A `Default` derive is applied only to the types that can satisfy it:
+    /// it is omitted from types containing e.g. non-zero integers (which
+    /// have no default value) and from types for which typify generates a
+    /// `Default` impl of its own (schema-specified defaults).
     pub fn with_derive(&mut self, derive: String) -> &mut Self {
         if !self.extra_derives.contains(&derive) {
             self.extra_derives.push(derive);
@@ -1316,6 +1321,24 @@ impl Type<'_> {
         type_entry.has_impl(type_space, impl_name)
     }
 
+    /// Whether this type has an implementation of [`Default`]--or could,
+    /// were a `Default` derive applied to it and to the generated types it
+    /// contains. Some types can never satisfy `Default`: the non-zero
+    /// integer types (produced e.g. by schemas with `"minimum": 1`), enums
+    /// without a schema-specified default, and anything that requires one
+    /// of those. Useful when post-processing generated code with additional
+    /// derives; note that typify itself omits a `Default` requested via
+    /// [`TypeSpaceSettings::with_derive`] from the types that cannot
+    /// satisfy it.
+    pub fn default_derivable(&self) -> bool {
+        let Type {
+            type_space,
+            type_entry,
+            ..
+        } = self;
+        type_entry.default_derivable(type_space, &mut BTreeSet::new())
+    }
+
     /// Provides the the type identifier for the builder if one exists.
     pub fn builder(&self) -> Option<TokenStream> {
         let Type {
@@ -1639,6 +1662,67 @@ mod tests {
         }
 
         validate_output::<Things>();
+    }
+
+    #[test]
+    fn test_default_derivable() {
+        let schema = json!({
+            "definitions": {
+                "nonzero": { "type": "integer", "minimum": 1 },
+                "needs-nonzero": {
+                    "type": "object",
+                    "properties": { "value": { "$ref": "#/definitions/nonzero" } },
+                    "required": ["value"],
+                },
+                "optional-nonzero": {
+                    "type": "object",
+                    "properties": { "value": { "$ref": "#/definitions/nonzero" } },
+                },
+                "plain": {
+                    "type": "object",
+                    "properties": { "value": { "type": "integer" } },
+                    "required": ["value"],
+                },
+                "transitive": {
+                    "type": "object",
+                    "properties": { "widget": { "$ref": "#/definitions/needs-nonzero" } },
+                    "required": ["widget"],
+                },
+                "enum-no-default": { "type": "string", "enum": ["a", "b"] },
+                "enum-default": {
+                    "type": "string",
+                    "enum": ["a", "b"],
+                    "default": "a",
+                },
+                "constrained": { "type": "string", "pattern": "^x" },
+                "recursive": {
+                    "type": "object",
+                    "properties": {
+                        "next": { "$ref": "#/definitions/recursive" },
+                    },
+                },
+            },
+        });
+        let schema: schemars::schema::RootSchema = serde_json::from_value(schema).unwrap();
+        let mut type_space = TypeSpace::default();
+        type_space.add_root_schema(schema).unwrap();
+
+        let derivable = |name: &str| {
+            type_space
+                .iter_types()
+                .find(|ty| ty.name() == name)
+                .unwrap_or_else(|| panic!("type {} not found", name))
+                .default_derivable()
+        };
+
+        assert!(!derivable("NeedsNonzero"));
+        assert!(derivable("OptionalNonzero"));
+        assert!(derivable("Plain"));
+        assert!(!derivable("Transitive"));
+        assert!(!derivable("EnumNoDefault"));
+        assert!(derivable("EnumDefault"));
+        assert!(!derivable("Constrained"));
+        assert!(derivable("Recursive"));
     }
 
     #[test]

@@ -37,6 +37,20 @@ fn test_custom_map() {
     trybuild::TestCases::new().pass("tests/schemas/maps_custom.rs");
 }
 
+/// Ensure that a requested Default derive lands only on the types that can
+/// satisfy it, and not on types that generate a Default impl of their own.
+#[test]
+fn test_default_derives() {
+    validate_schema(
+        "tests/schemas/default-derives.json".into(),
+        "tests/schemas/default-derives-derived.rs".into(),
+        TypeSpaceSettings::default().with_derive("Default".to_string()),
+    )
+    .unwrap();
+
+    trybuild::TestCases::new().pass("tests/schemas/default-derives-derived.rs");
+}
+
 /// Ensure that opened string enums gain a lossless catch-all variant, that
 /// enums already declaring the configured name stay closed, and that tagged
 /// enums are unaffected.

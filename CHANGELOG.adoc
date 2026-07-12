@@ -22,6 +22,11 @@ https://github.com/oxidecomputer/typify/compare/v0.7.0\...HEAD[Full list of comm
 * Add `with_open_enum_variant`, giving plain string enums a lossless catch-all variant
 * Add `with_schema_in_docs(false)` to omit the embedded JSON schema from doc comments
 * Add `TypeSpace::to_stream_for`, `TypeSpace::iter_definitions`, and `Type::id` for organizing generated types into caller-defined modules
+* A `Default` derive requested via `with_derive` is omitted from types that cannot satisfy it (e.g. structs with required non-zero integer members) and from types with a generated `Default` impl; `Type::default_derivable` exposes the underlying analysis
+* `Type::has_impl` no longer claims `Default` for the non-zero integer types, and reports the `Default` impl generated for structs all of whose properties have defaults
+* Export `rust_type_ident` and `rust_field_ident`, the identifier forms typify generates for schema names
+* Conversion-produced `::std::string::String` newtype inners no longer emit a `TryFrom<String>` that conflicts with the blanket impl
+* The inner types of Option-forming constructions (`anyOf` with null, enums with a null member) are named distinctly from their wrappers
 
 == 0.7.0 (released 2026-06-05)
 

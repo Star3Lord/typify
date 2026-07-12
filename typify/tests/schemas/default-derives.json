@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "validate the placement of a requested Default derive: on types that can satisfy it, and not on types that cannot or that generate a Default impl of their own",
+  "definitions": {
+    "plain-widget": {
+      "$comment": "derives Default: every field type can",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "count"
+      ]
+    },
+    "serial-widget": {
+      "$comment": "cannot derive Default: the required serial is a non-zero integer",
+      "type": "object",
+      "properties": {
+        "serial": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "serial"
+      ]
+    },
+    "widget-holder": {
+      "$comment": "cannot derive Default: it requires a type that cannot",
+      "type": "object",
+      "properties": {
+        "widget": {
+          "$ref": "#/definitions/serial-widget"
+        }
+      },
+      "required": [
+        "widget"
+      ]
+    },
+    "defaulted-widget": {
+      "$comment": "generates its own Default impl from the schema default; the derive would conflict",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "default": {
+        "name": "widget"
+      }
+    },
+    "settled-widget": {
+      "$comment": "generates its own Default impl because every property has a default",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer",
+          "default": 3
+        }
+      }
+    },
+    "widget-kind": {
+      "$comment": "enums cannot derive Default without a designated variant",
+      "type": "string",
+      "enum": [
+        "gear",
+        "sprocket"
+      ]
+    },
+    "defaulted-widget-kind": {
+      "$comment": "generates its own Default impl from the schema default",
+      "type": "string",
+      "enum": [
+        "gear",
+        "sprocket"
+      ],
+      "default": "gear"
+    },
+    "kind-holder": {
+      "$comment": "derives Default: its required enum has a Default impl of its own",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/defaulted-widget-kind"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  }
+}

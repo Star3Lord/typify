@@ -106,7 +106,7 @@ impl ::std::convert::TryFrom<::std::string::String> for AgencyStatus {
 }
 #[doc = "`FlightReference`"]
 #[serde_with::skip_serializing_none]
-#[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
+#[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct FlightReference {
     #[serde(rename = "flightNumber")]
@@ -122,4 +122,12 @@ pub struct GenericAgency {
     #[serde(rename = "agencyId")]
     pub agency_id: ::uuid::Uuid,
     pub name: ::std::option::Option<::std::string::String>,
+}
+#[doc = "`Ticket`"]
+#[serde_with::skip_serializing_none]
+#[derive(:: serde :: Deserialize, :: serde :: Serialize, Clone, Debug)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Ticket {
+    #[serde(rename = "couponNumber")]
+    pub coupon_number: ::std::num::NonZeroU64,
 }

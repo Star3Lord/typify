@@ -9,6 +9,7 @@ use syn::Path;
 use unicode_ident::is_xid_continue;
 
 use crate::{
+    convert::STD_NUM_NONZERO_PREFIX,
     enums::output_variant,
     output::{OutputSpace, OutputSpaceMod},
     sanitize,
@@ -644,7 +645,17 @@ impl TypeEntry {
             },
 
             TypeEntryDetails::Struct(details) => match impl_name {
-                TypeSpaceImpl::Default => details.default.is_some(),
+                // In addition to types with a schema-specified default, a
+                // Default impl is generated for structs all of whose
+                // properties have (intrinsic or specified) defaults; see
+                // `output_struct`.
+                TypeSpaceImpl::Default => {
+                    details.default.is_some()
+                        || details
+                            .properties
+                            .iter()
+                            .all(|prop| !matches!(prop.state, StructPropertyState::Required))
+                }
                 _ => false,
             },
             TypeEntryDetails::Newtype(details) => match (&details.constraints, impl_name) {
@@ -716,8 +727,10 @@ impl TypeEntry {
                 TypeSpaceImpl::Default | TypeSpaceImpl::FromStr | TypeSpaceImpl::Display => true,
                 TypeSpaceImpl::FromStringIrrefutable => false,
             },
-            TypeEntryDetails::Integer(_) => match impl_name {
-                TypeSpaceImpl::Default | TypeSpaceImpl::FromStr | TypeSpaceImpl::Display => true,
+            TypeEntryDetails::Integer(name) => match impl_name {
+                // The non-zero types have no default.
+                TypeSpaceImpl::Default => !name.starts_with(STD_NUM_NONZERO_PREFIX),
+                TypeSpaceImpl::FromStr | TypeSpaceImpl::Display => true,
                 TypeSpaceImpl::FromStringIrrefutable => false,
             },
 
@@ -731,6 +744,84 @@ impl TypeEntry {
                 | TypeSpaceImpl::Display
                 | TypeSpaceImpl::FromStringIrrefutable => true,
             },
+
+            TypeEntryDetails::Reference(_) => unreachable!(),
+        }
+    }
+
+    /// Whether this type has an implementation of Default--or could, were a
+    /// `Default` derive applied to it and to the generated types it
+    /// contains. This is the satisfiability question behind putting
+    /// `Default` in a derive list: types such as the non-zero integers (and
+    /// anything that requires one) can never satisfy it. Types under
+    /// consideration in an outer invocation report false: a cycle through
+    /// required members has no finite default value.
+    pub(crate) fn default_derivable(
+        &self,
+        type_space: &TypeSpace,
+        in_progress: &mut BTreeSet<TypeId>,
+    ) -> bool {
+        fn id_derivable(
+            type_space: &TypeSpace,
+            type_id: &TypeId,
+            in_progress: &mut BTreeSet<TypeId>,
+        ) -> bool {
+            if !in_progress.insert(type_id.clone()) {
+                return false;
+            }
+            let derivable = type_space
+                .id_to_entry
+                .get(type_id)
+                .is_some_and(|type_entry| type_entry.default_derivable(type_space, in_progress));
+            in_progress.remove(type_id);
+            derivable
+        }
+
+        match &self.details {
+            // Enums only implement Default by way of a generated impl (a
+            // derive would require a designated variant).
+            TypeEntryDetails::Enum(details) => details.default.is_some(),
+
+            TypeEntryDetails::Struct(details) => {
+                details.default.is_some()
+                    || details
+                        .properties
+                        .iter()
+                        .all(|prop| id_derivable(type_space, &prop.type_id, in_progress))
+            }
+
+            // A derived Default could produce a value that violates the
+            // constraints; only a schema-specified default will do.
+            TypeEntryDetails::Newtype(details) => {
+                details.default.is_some()
+                    || (matches!(details.constraints, TypeEntryNewtypeConstraints::None)
+                        && id_derivable(type_space, &details.type_id, in_progress))
+            }
+
+            TypeEntryDetails::Native(details) => details.impls.contains(&TypeSpaceImpl::Default),
+
+            TypeEntryDetails::Box(type_id) => id_derivable(type_space, type_id, in_progress),
+            TypeEntryDetails::Tuple(type_ids) => {
+                type_ids.len() <= 12
+                    && type_ids
+                        .iter()
+                        .all(|type_id| id_derivable(type_space, type_id, in_progress))
+            }
+            TypeEntryDetails::Array(item_id, length) => {
+                *length <= 32 && id_derivable(type_space, item_id, in_progress)
+            }
+
+            TypeEntryDetails::Integer(name) => !name.starts_with(STD_NUM_NONZERO_PREFIX),
+
+            TypeEntryDetails::Unit
+            | TypeEntryDetails::Option(_)
+            | TypeEntryDetails::Vec(_)
+            | TypeEntryDetails::Map(_, _)
+            | TypeEntryDetails::Set(_)
+            | TypeEntryDetails::Boolean
+            | TypeEntryDetails::Float(_)
+            | TypeEntryDetails::String
+            | TypeEntryDetails::JsonValue => true,
 
             TypeEntryDetails::Reference(_) => unreachable!(),
         }
@@ -1139,6 +1230,9 @@ impl TypeEntry {
             derive_set,
             &self.extra_derives,
             &type_space.settings.extra_derives,
+            // Deriving Default on an enum would require a designated
+            // variant; schema-specified defaults get a generated impl.
+            false,
         );
 
         let attrs = strings_to_attrs(&self.extra_attrs, &type_space.settings.extra_attrs);
@@ -1248,10 +1342,21 @@ impl TypeEntry {
             });
         });
 
+        // A Default impl is generated below when there's a schema-specified
+        // default or when every property has a default of its own; in
+        // either case a requested Default derive would conflict with it.
+        let generates_default_impl = default.is_some()
+            || prop_default
+                .iter()
+                .all(|prop_default| !matches!(prop_default, PropDefault::None(_)));
+        let derive_default =
+            !generates_default_impl && self.default_derivable(type_space, &mut BTreeSet::new());
+
         let derives = strings_to_derives(
             derive_set,
             &self.extra_derives,
             &type_space.settings.extra_derives,
+            derive_default,
         );
 
         let attrs = strings_to_attrs(&self.extra_attrs, &type_space.settings.extra_attrs);
@@ -1775,10 +1880,16 @@ impl TypeEntry {
             }
         });
 
+        // A requested Default derive would conflict with the impl generated
+        // for a schema-specified default, and constrained newtypes cannot
+        // derive a (potentially invalid) default value.
+        let derive_default =
+            default.is_none() && self.default_derivable(type_space, &mut BTreeSet::new());
+
         // This isn't the cleanest. Unlike other types, we roll in the
         // extra_derives here so that we can sniff out and override uses of
         // "schemars::JsonSchema".
-        let derives = strings_to_derives(derive_set, &self.extra_derives, &[]);
+        let derives = strings_to_derives(derive_set, &self.extra_derives, &[], derive_default);
 
         let attrs = strings_to_attrs(&self.extra_attrs, &type_space.settings.extra_attrs);
 
@@ -2137,10 +2248,25 @@ fn strings_to_derives<'a>(
     derive_set: BTreeSet<&'a str>,
     type_derives: &'a BTreeSet<String>,
     extra_derives: &'a [String],
+    derive_default: bool,
 ) -> impl Iterator<Item = TokenStream> + 'a {
     let mut combined_derives = derive_set.clone();
     combined_derives.extend(extra_derives.iter().map(String::as_str));
     combined_derives.extend(type_derives.iter().map(String::as_str));
+
+    // A requested Default derive is omitted for types that cannot satisfy
+    // it (it could not compile) and for types with a generated Default impl
+    // (it would conflict).
+    if !derive_default {
+        combined_derives.retain(|derive| {
+            let keep = derive.rsplit("::").next() != Some("Default");
+            if !keep {
+                log::debug!("omitting the Default derive: not satisfiable or already implemented");
+            }
+            keep
+        });
+    }
+
     combined_derives.into_iter().map(|derive| {
         syn::parse_str::<syn::Path>(derive)
             .unwrap()

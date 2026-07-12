@@ -19,7 +19,14 @@ use syn::visit_mut::VisitMut;
 use typify_impl::{AllOfStrategy, OptionalProperties, TypeSpace, TypeSpaceImpl, TypeSpaceSettings};
 
 /// The decoration layer: everything here is additive or wire-neutral.
-struct Decorate;
+struct Decorate {
+    /// Names of the types eligible for a `Default` derive, per
+    /// [`typify_impl::Type::default_derivable`]: a house style that puts
+    /// `Default` in its derive list must consult typify's type knowledge or
+    /// it will emit derives that cannot compile (e.g. on structs with
+    /// required non-zero integer fields).
+    default_derivable: std::collections::BTreeSet<String>,
+}
 
 impl VisitMut for Decorate {
     fn visit_item_struct_mut(&mut self, item: &mut syn::ItemStruct) {
@@ -33,6 +40,19 @@ impl VisitMut for Decorate {
             derive_index,
             syn::parse_quote! { #[serde_with::skip_serializing_none] },
         );
+        if self.default_derivable.contains(&item.ident.to_string()) {
+            for attr in &mut item.attrs {
+                if attr.path().is_ident("derive") {
+                    let derives = attr.parse_args_with(
+                        syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+                    );
+                    if let Ok(mut derives) = derives {
+                        derives.push(syn::parse_quote! { Default });
+                        *attr = syn::parse_quote! { #[derive( #derives )] };
+                    }
+                }
+            }
+        }
         item.attrs.push(
             syn::parse_quote! { #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))] },
         );
@@ -154,6 +174,17 @@ fn test_api_client_style() {
                     },
                     "required": [ "flightNumber" ]
                 },
+                "Ticket": {
+                    "type": "object",
+                    "properties": {
+                        "couponNumber": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 1
+                        }
+                    },
+                    "required": [ "couponNumber" ]
+                },
                 "AgencyStatus": {
                     "type": "string",
                     "enum": [ "active", "suspended" ]
@@ -182,8 +213,16 @@ fn test_api_client_style() {
     );
     type_space.add_openapi_document(&document).unwrap();
 
+    // The house style adds Default to struct derive lists; consult typify
+    // for the types that can satisfy it.
+    let default_derivable = type_space
+        .iter_types()
+        .filter(|ty| ty.default_derivable())
+        .map(|ty| ty.name())
+        .collect();
+
     let mut file = syn::parse2::<syn::File>(type_space.to_stream()).unwrap();
-    Decorate.visit_file_mut(&mut file);
+    Decorate { default_derivable }.visit_file_mut(&mut file);
     let actual = rustfmt_wrapper::rustfmt(file.to_token_stream().to_string()).unwrap();
 
     assert_contents("tests/api-client.out", &actual);
@@ -206,4 +245,24 @@ fn test_api_client_style() {
     assert!(actual.contains("#[serde_with::skip_serializing_none]"));
     assert!(actual.contains("#[cfg_attr(feature = \"schemars\", derive(schemars::JsonSchema))]"));
     assert!(!actual.contains("skip_serializing_if"));
+    // Default lands on the struct whose fields can satisfy it--and not on
+    // the one with a required non-zero field, nor on those containing the
+    // uuid (for which no Default impl was claimed).
+    let derives_default = |type_name: &str| {
+        let definition = actual
+            .split(&format!("pub struct {}", type_name))
+            .next()
+            .unwrap();
+        definition
+            .rsplit("#[derive(")
+            .next()
+            .unwrap()
+            .split(")]")
+            .next()
+            .unwrap()
+            .contains("Default")
+    };
+    assert!(derives_default("FlightReference"));
+    assert!(!derives_default("Ticket"));
+    assert!(!derives_default("Agency"));
 }
