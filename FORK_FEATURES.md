@@ -62,7 +62,7 @@ round-trip losslessly. `FromStr` becomes irrefutable; opened enums drop
 `with_schema_in_docs(false)` limits doc comments to the schema description
 (the embedded JSON schema block remains the default).
 
-### 6. Module organization
+### 6. Module organization and introspection
 
 `TypeSpace::to_stream_for(&[TypeId])` generates a self-contained stream for a
 subset of types (including exactly the shared error/defaults items those
@@ -70,9 +70,24 @@ types need); `TypeSpace::iter_definitions()` pairs definition names with
 their types; `Type::id()` identifies types for subset selection. Consumers
 assemble arbitrary module trees (see `typify/tests/modules.rs`), adding `use`
 items for cross-module references. Replaces the old in-typify partitioned
-emitter (`to_stream_partitioned`, `definition_rust_names`,
-`rust_type_ident` / `rust_field_ident` — generated names come from
-`iter_definitions` + `Type::name()`; field idents are read from the AST).
+emitter (`to_stream_partitioned` / `definition_rust_names`).
+
+`rust_type_ident` / `rust_field_ident` (the identifier forms typify
+generates for schema names) are exported for pre-generation selector
+resolution, and `Type::default_derivable()` answers whether a type has — or
+could, with a `Default` derive applied throughout, have — a `Default`
+implementation (see "`Default` is type knowledge" below).
+
+### `Default` is type knowledge
+
+Some types can never satisfy `Default` (non-zero integers from
+`"minimum": 1` schemas, enums without a schema default, and anything
+requiring one of those) and some generate a `Default` impl of their own,
+with which a derive would conflict. typify now omits a `Default` requested
+via `with_derive`/patches from exactly those types, and exposes the
+analysis as `Type::default_derivable()` — a house style that adds `Default`
+to derive lists in post-processing must consult it (see the acceptance
+test's `Decorate` pass) instead of deriving unconditionally.
 
 All of 2–5 are exposed through `import_types!`
 (`optional_properties = Explicit`, `all_of_strategy = Compose`,
@@ -103,3 +118,18 @@ style end to end.
 `SerdeFieldCase` (dual casing surfaces) and the bulk
 `DeepPatchPolicy::AllOptionStructs` had no consumers and were not carried
 over.
+
+## Consumer workarounds made unnecessary
+
+Downstream feedback (the ferrotype migration and its real-world audit)
+surfaced gaps that have since moved into typify; consumers carrying these
+workarounds can delete them:
+
+| Workaround | Superseded by |
+|---|---|
+| stripping string constraints in a lowering pass so a `{type: string}` conversion can't clobber string enums | conversions never match schemas whose `enum`/`const` they don't specify |
+| hoisting the inners of nullable wrappers into synthetic `{name}Inner` definitions | Option-forming constructions name their inner types distinctly |
+| omitting `default: null` from lowered documents | the type-array split no longer copies the schema default onto the inner type |
+| dropping typify's manual `TryFrom<String>` where a `From<String>` blanket impl collides | native `::std::string::String` newtype inners take the string path (no manual `TryFrom` ladder) |
+| a local port of typify's `sanitize` for selector resolution | exported `rust_type_ident` / `rust_field_ident` |
+| unconditional `Default` in decoration derive lists (E0277 on required non-zero fields) | consult `Type::default_derivable()`; typify's own `with_derive("Default")` self-filters |
